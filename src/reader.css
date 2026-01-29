@@ -1,0 +1,391 @@
+/* Readr - Reader View Styles */
+
+:root {
+  --reader-bg: #ffffff;
+  --reader-text: #1d1d1f;
+  --reader-text-secondary: #6e6e73;
+  --reader-link: #0066cc;
+  --reader-link-visited: #551a8b;
+  --reader-border: #d2d2d7;
+  --reader-code-bg: #f5f5f7;
+  --reader-blockquote-border: #d2d2d7;
+  --reader-selection: rgba(0, 102, 204, 0.2);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --reader-bg: #1d1d1f;
+    --reader-text: #f5f5f7;
+    --reader-text-secondary: #a1a1a6;
+    --reader-link: #6bb8ff;
+    --reader-link-visited: #c792ea;
+    --reader-border: #424245;
+    --reader-code-bg: #2d2d2f;
+    --reader-blockquote-border: #424245;
+    --reader-selection: rgba(107, 184, 255, 0.3);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 18px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body.readr-active {
+  margin: 0;
+  padding: 0;
+  background-color: var(--reader-bg);
+  color: var(--reader-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  line-height: 1.7;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+::selection {
+  background: var(--reader-selection);
+}
+
+/* Reader Container */
+.readr-container {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 40px 24px 80px;
+}
+
+/* Close Button */
+.readr-close {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: var(--reader-code-bg);
+  color: var(--reader-text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  line-height: 1;
+  opacity: 0.7;
+  transition: opacity 0.2s ease, background-color 0.2s ease;
+  z-index: 1000;
+}
+
+.readr-close:hover {
+  opacity: 1;
+}
+
+.readr-close:focus {
+  outline: 2px solid var(--reader-link);
+  outline-offset: 2px;
+}
+
+/* Article Header */
+.readr-header {
+  margin-bottom: 32px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--reader-border);
+}
+
+.readr-title {
+  font-size: 2.2rem;
+  font-weight: 700;
+  line-height: 1.2;
+  margin: 0 0 16px;
+  letter-spacing: -0.02em;
+}
+
+.readr-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  color: var(--reader-text-secondary);
+  font-size: 0.9rem;
+}
+
+.readr-byline {
+  font-style: normal;
+}
+
+.readr-site {
+  color: var(--reader-text-secondary);
+}
+
+.readr-site::before {
+  content: "\2022";
+  margin-right: 16px;
+}
+
+/* Article Content */
+.readr-content {
+  font-size: 1.1rem;
+}
+
+.readr-content p {
+  margin: 0 0 1.5em;
+}
+
+.readr-content h1,
+.readr-content h2,
+.readr-content h3,
+.readr-content h4,
+.readr-content h5,
+.readr-content h6 {
+  margin: 2em 0 0.8em;
+  line-height: 1.3;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.readr-content h1 {
+  font-size: 1.8rem;
+}
+
+.readr-content h2 {
+  font-size: 1.5rem;
+}
+
+.readr-content h3 {
+  font-size: 1.25rem;
+}
+
+.readr-content h4,
+.readr-content h5,
+.readr-content h6 {
+  font-size: 1.1rem;
+}
+
+/* Links */
+.readr-content a {
+  color: var(--reader-link);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  transition: color 0.15s ease;
+}
+
+.readr-content a:visited {
+  color: var(--reader-link-visited);
+}
+
+.readr-content a:hover {
+  text-decoration-thickness: 2px;
+}
+
+/* Images */
+.readr-content img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 1.5em auto;
+  border-radius: 4px;
+}
+
+.readr-content figure {
+  margin: 2em 0;
+  padding: 0;
+}
+
+.readr-content figcaption {
+  margin-top: 8px;
+  color: var(--reader-text-secondary);
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+/* Blockquotes */
+.readr-content blockquote {
+  margin: 1.5em 0;
+  padding: 0 0 0 20px;
+  border-left: 3px solid var(--reader-blockquote-border);
+  color: var(--reader-text-secondary);
+  font-style: italic;
+}
+
+.readr-content blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+/* Code */
+.readr-content code {
+  font-family: "SF Mono", SFMono-Regular, ui-monospace, Menlo, Monaco,
+    "Cascadia Mono", "Segoe UI Mono", "Roboto Mono", "Oxygen Mono",
+    "Ubuntu Monospace", "Source Code Pro", "Fira Mono", "Droid Sans Mono",
+    "Courier New", monospace;
+  font-size: 0.9em;
+  background: var(--reader-code-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.readr-content pre {
+  margin: 1.5em 0;
+  padding: 16px 20px;
+  background: var(--reader-code-bg);
+  border-radius: 8px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.readr-content pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+/* Lists */
+.readr-content ul,
+.readr-content ol {
+  margin: 1.5em 0;
+  padding-left: 1.5em;
+}
+
+.readr-content li {
+  margin-bottom: 0.5em;
+}
+
+.readr-content li > ul,
+.readr-content li > ol {
+  margin: 0.5em 0;
+}
+
+/* Tables */
+.readr-content table {
+  width: 100%;
+  margin: 1.5em 0;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.readr-content th,
+.readr-content td {
+  padding: 12px 16px;
+  text-align: left;
+  border-bottom: 1px solid var(--reader-border);
+}
+
+.readr-content th {
+  font-weight: 600;
+  background: var(--reader-code-bg);
+}
+
+.readr-content tr:last-child td {
+  border-bottom: none;
+}
+
+/* Horizontal Rule */
+.readr-content hr {
+  margin: 2.5em 0;
+  border: none;
+  border-top: 1px solid var(--reader-border);
+}
+
+/* Footnotes */
+.readr-content sup {
+  font-size: 0.75em;
+  vertical-align: super;
+  line-height: 0;
+}
+
+.readr-content sup a {
+  text-decoration: none;
+}
+
+/* Video embeds */
+.readr-content iframe,
+.readr-content video {
+  max-width: 100%;
+  margin: 1.5em auto;
+  display: block;
+  border-radius: 4px;
+}
+
+/* Definition lists */
+.readr-content dl {
+  margin: 1.5em 0;
+}
+
+.readr-content dt {
+  font-weight: 600;
+  margin-top: 1em;
+}
+
+.readr-content dd {
+  margin: 0.25em 0 0 1.5em;
+  color: var(--reader-text-secondary);
+}
+
+/* Keyboard inputs */
+.readr-content kbd {
+  display: inline-block;
+  padding: 2px 8px;
+  font-family: inherit;
+  font-size: 0.85em;
+  background: var(--reader-code-bg);
+  border: 1px solid var(--reader-border);
+  border-radius: 4px;
+  box-shadow: 0 1px 0 var(--reader-border);
+}
+
+/* Abbreviations */
+.readr-content abbr[title] {
+  text-decoration: underline dotted;
+  cursor: help;
+}
+
+/* Print styles */
+@media print {
+  .readr-close {
+    display: none;
+  }
+
+  .readr-container {
+    max-width: none;
+    padding: 0;
+  }
+
+  body.readr-active {
+    background: white;
+    color: black;
+  }
+}
+
+/* Responsive adjustments */
+@media (max-width: 720px) {
+  html {
+    font-size: 16px;
+  }
+
+  .readr-container {
+    padding: 24px 16px 60px;
+  }
+
+  .readr-title {
+    font-size: 1.8rem;
+  }
+
+  .readr-close {
+    top: 12px;
+    right: 12px;
+    width: 32px;
+    height: 32px;
+    font-size: 18px;
+  }
+
+  .readr-content pre {
+    padding: 12px 16px;
+    border-radius: 0;
+    margin-left: -16px;
+    margin-right: -16px;
+  }
+}
