@@ -9,25 +9,25 @@ chrome.action.onClicked.addListener(async (tab) => {
   }
 
   try {
-    // Check if reader mode is already active
+    // Check if reader mode is already active (only check DOM state, not sessionStorage)
     const [result] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: () => {
-        return document.body.classList.contains("readr-active") ||
-               sessionStorage.getItem("__readrActive") === "true";
-      },
+      func: () => document.body.classList.contains("readr-active"),
     });
 
     if (result.result) {
       // Reader mode is active, exit by reloading the page
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: () => {
-          sessionStorage.removeItem("__readrActive");
-          location.reload();
-        },
+        func: () => location.reload(),
       });
     } else {
+      // Clear any stale sessionStorage from previous sessions
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => sessionStorage.removeItem("__readrActive"),
+      });
+
       // Inject Readability library first
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
