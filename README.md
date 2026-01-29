@@ -1,6 +1,6 @@
 # Readr
 
-A clean, opinionated Reader View Chrome extension with automatic dark mode support.
+A clean, opinionated Reader View Chrome extension with automatic dark mode support. Supports all major Chromium-based browsers, including Dia, Arc, Comet, and Brave. 
 
 ![screenl](https://github.com/user-attachments/assets/c94e0ffc-f387-45cf-b969-bd8bf574ec84)
 
