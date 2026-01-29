@@ -2,6 +2,8 @@
 
 A clean, opinionated Reader View Chrome extension with automatic dark mode support.
 
+![screenl](https://github.com/user-attachments/assets/c94e0ffc-f387-45cf-b969-bd8bf574ec84)
+
 ## Features
 
 - **One-click activation** — Click the extension icon to toggle reader mode
