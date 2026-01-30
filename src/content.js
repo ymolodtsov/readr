@@ -35,6 +35,9 @@
     }
   }
 
+  // Clean up trailing structural elements (hr, headings without content)
+  const cleanedContent = trimTrailingStructuralElements(article.content);
+
   // Build the reader view
   const readerHTML = `
     <!DOCTYPE html>
@@ -64,7 +67,7 @@
           </header>
           ${heroImageHTML}
           <div class="readr-content">
-            ${article.content}
+            ${cleanedContent}
           </div>
         </article>
       </div>
@@ -90,6 +93,56 @@
   function exitReaderMode() {
     sessionStorage.removeItem("__readrActive");
     location.reload();
+  }
+
+  // Remove trailing structural elements (hr, headings) with no paragraph content after them
+  function trimTrailingStructuralElements(html) {
+    const temp = document.createElement('div');
+    temp.innerHTML = html;
+
+    const structuralTags = ['HR', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'];
+
+    // Check if an element has any real paragraph content (not just headings/divs)
+    function hasParagraphContent(el) {
+      // Has a <p> with actual text
+      const paragraphs = el.querySelectorAll('p');
+      for (const p of paragraphs) {
+        if (p.textContent.trim().length > 0) return true;
+      }
+      // Has other content elements like lists, blockquotes, figures
+      if (el.querySelector('ul, ol, blockquote, figure, pre, table')) return true;
+      return false;
+    }
+
+    // Find the actual content container (Readability wraps in div#readability-page-1)
+    let container = temp;
+    const wrapper = temp.querySelector('#readability-page-1, .page');
+    if (wrapper) {
+      container = wrapper;
+    }
+
+    // Work backwards from the end, removing trailing structural elements
+    let changed = true;
+    while (changed) {
+      changed = false;
+      const lastChild = container.lastElementChild;
+      if (!lastChild) break;
+
+      // Check if the last element is a structural element (hr or heading)
+      if (structuralTags.includes(lastChild.tagName)) {
+        lastChild.remove();
+        changed = true;
+        continue;
+      }
+
+      // Check if it's a container with no real paragraph content (only headings/divs)
+      if (['DIV', 'SECTION', 'ARTICLE'].includes(lastChild.tagName) && !hasParagraphContent(lastChild)) {
+        lastChild.remove();
+        changed = true;
+      }
+    }
+
+    return temp.innerHTML;
   }
 
   // Clean up byline that may have concatenated metadata
