@@ -102,6 +102,24 @@
 
     const structuralTags = ['HR', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'];
 
+    // Clean up empty list items from all lists
+    const lists = temp.querySelectorAll('ul, ol');
+    for (const list of lists) {
+      // Remove empty <li> items from the end
+      while (list.lastElementChild) {
+        const lastItem = list.lastElementChild;
+        if (lastItem.tagName === 'LI' && !lastItem.textContent.trim()) {
+          lastItem.remove();
+        } else {
+          break;
+        }
+      }
+      // If list is now empty, remove it
+      if (!list.children.length) {
+        list.remove();
+      }
+    }
+
     // Check if an element has any real paragraph content (not just headings/divs)
     function hasParagraphContent(el) {
       // Has a <p> with actual text
