@@ -1,6 +1,6 @@
 # Readr
 
-A clean, opinionated Reader View Chrome extension with automatic dark mode support. Supports all major Chromium-based browsers, including Dia, Arc, Comet, and Brave. 
+A Chrome extension that transforms cluttered web articles into a clean, distraction-free reading experience. When activated, it uses Mozilla's Readability library to extract the main article content, then displays it in an elegant card-based layout with automatic dark mode support. The extension intelligently finds hero images, cleans up messy bylines that contain concatenated dates or metadata, and removes trailing junk like empty list items, orphaned headings, and promotional sections. Users can exit reader mode with the Escape key or close button. The minimal, Safari-inspired design focuses on typography and readability, with responsive layouts for all screen sizes. Supports all Chromium-based browsers including Arc, Brave, and Edge. 
 
 ![screenl](https://github.com/user-attachments/assets/c94e0ffc-f387-45cf-b969-bd8bf574ec84)
 
