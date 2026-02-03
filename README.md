@@ -2,7 +2,7 @@
 
 A Chrome extension that transforms cluttered web articles into a clean, distraction-free reading experience. When activated, it uses Mozilla's Readability library to extract the main article content, then displays it in an elegant card-based layout with automatic dark mode support. The extension intelligently finds hero images, cleans up messy bylines that contain concatenated dates or metadata, and removes trailing junk like empty list items, orphaned headings, and promotional sections. Users can exit reader mode with the Escape key or close button. The minimal, Safari-inspired design focuses on typography and readability, with responsive layouts for all screen sizes. Supports all Chromium-based browsers including Arc, Brave, and Edge. 
 
-![screenl](https://github.com/user-attachments/assets/c94e0ffc-f387-45cf-b969-bd8bf574ec84)
+<img width="3616" height="2986" alt="CleanShot 2026-02-02 at 20 29 39@2x" src="https://github.com/user-attachments/assets/cf77b14a-894a-4feb-b39f-ed214025ee3d" />
 
 ## Features
 
