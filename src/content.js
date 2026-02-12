@@ -26,11 +26,14 @@
   // Clean up the byline (Readability sometimes concatenates metadata)
   const cleanedByline = cleanByline(article.byline);
 
-  // Only look for hero image if article doesn't already have one at the start
+  // Look for hero image, but skip if the same image is already at the start of Readability's content
   let heroImageHTML = '';
-  if (!checkForLeadImage(article.content)) {
-    const heroImage = findHeroImage();
-    if (heroImage) {
+  const heroImage = findHeroImage();
+  // console.log(`[Readr] findHeroImage returned: ${heroImage ? heroImage.src?.substring(0, 60) + '...' : 'null'}`);
+  if (heroImage) {
+    const isDuplicate = isHeroImageInContent(heroImage.src, article.content);
+    // console.log(`[Readr] isHeroImageInContent: ${isDuplicate}`);
+    if (!isDuplicate) {
       heroImageHTML = `<figure class="readr-hero"><img src="${escapeAttr(heroImage.src)}" alt="${escapeAttr(heroImage.alt || '')}">${heroImage.caption ? `<figcaption>${escapeHTML(heroImage.caption)}</figcaption>` : ''}</figure>`;
     }
   }
@@ -61,7 +64,7 @@
             ${cleanedByline || article.siteName ? `
             <div class="readr-meta">
               ${cleanedByline ? `<span class="readr-byline">${escapeHTML(cleanedByline)}</span>` : ""}
-              ${article.siteName ? `<span class="readr-site">${escapeHTML(article.siteName)}</span>` : ""}
+              ${article.siteName ? `<span class="readr-site${cleanedByline ? '' : ' readr-site-only'}">${escapeHTML(article.siteName)}</span>` : ""}
             </div>
             ` : ""}
           </header>
@@ -227,74 +230,82 @@
   }
 
   // Find the hero/lead image of the article
+  // Conservative approach: only use strong semantic signals
+  // We'd rather show no hero than show a wrong image (logo, brand image, etc.)
   function findHeroImage() {
-    // First, try Open Graph image (most reliable for articles)
-    const ogImage = document.querySelector('meta[property="og:image"]');
-    if (ogImage && ogImage.content) {
-      const ogUrl = ogImage.content;
-      // Validate it's not a tiny icon or logo
-      if (!isLikelyLogo(ogUrl)) {
-        return { src: makeAbsolute(ogUrl), alt: '', caption: '' };
-      }
-    }
+    console.log('[Readr] findHeroImage called');
 
-    // Try Twitter card image
-    const twitterImage = document.querySelector('meta[name="twitter:image"]');
-    if (twitterImage && twitterImage.content) {
-      const twitterUrl = twitterImage.content;
-      if (!isLikelyLogo(twitterUrl)) {
-        return { src: makeAbsolute(twitterUrl), alt: '', caption: '' };
-      }
-    }
-
-    // Look for hero image in the DOM
-    // Common selectors for hero/featured images
-    const heroSelectors = [
+    // 1. Look for images in semantic figure elements within article content
+    const figureSelectors = [
       'article figure:first-of-type img',
-      '[class*="hero"] img',
-      '[class*="featured"] img',
-      '[class*="lead"] img',
-      '[class*="cover"] img',
-      '[class*="post-image"] img',
-      '[class*="article-image"] img',
-      '[class*="entry-image"] img',
       'main figure:first-of-type img',
-      '.post img:first-of-type',
-      'article img:first-of-type',
+      '[role="main"] figure:first-of-type img',
     ];
 
-    for (const selector of heroSelectors) {
+    for (const selector of figureSelectors) {
       try {
         const img = document.querySelector(selector);
-        if (img && isValidHeroImage(img)) {
-          return extractImageData(img);
+        if (img) {
+          // console.log(`[Readr] Found figure img with selector: ${selector}`);
+          if (isValidHeroImage(img)) {
+            return extractImageData(img);
+          } else {
+            console.log('[Readr] Figure img failed isValidHeroImage');
+          }
         }
       } catch (e) {
         // Invalid selector, skip
       }
     }
 
-    // Fallback: find the largest image in the top portion of the page
-    const images = document.querySelectorAll('img');
-    let bestImage = null;
-    let bestScore = 0;
-
-    for (const img of images) {
-      // Skip images that are likely not hero images
-      if (!isValidHeroImage(img)) continue;
-
-      // Calculate a score based on size and position
-      const rect = img.getBoundingClientRect();
-      const score = calculateImageScore(img, rect);
-
-      if (score > bestScore) {
-        bestScore = score;
-        bestImage = img;
+    // 2. Look for images with fetchpriority="high" (explicit LCP signal)
+    // This is a strong signal that the site considers this their hero image
+    // Query broadly - isValidHeroImageLight will reject nav/header/footer
+    const priorityImgs = document.querySelectorAll('img[fetchpriority="high"]');
+    // console.log(`[Readr] Found ${priorityImgs.length} img(s) with fetchpriority="high"`);
+    for (const img of priorityImgs) {
+      // console.log(`[Readr] Checking priority img: ${img.src?.substring(0, 60)}...`);
+      if (isValidHeroImageLight(img)) {
+        console.log('[Readr] Priority img passed validation');
+        return extractImageData(img);
+      } else {
+        console.log('[Readr] Priority img failed isValidHeroImageLight');
       }
     }
 
-    if (bestImage && bestScore > 50000) { // Minimum threshold
-      return extractImageData(bestImage);
+    // 3. Look for images that have a figcaption nearby (semantic caption signal)
+    // Sites like The Verge use figcaption without figure wrapper
+    const captionedImg = findImageWithNearbyCaptions();
+    // console.log(`[Readr] findImageWithNearbyCaptions returned: ${captionedImg ? 'img found' : 'null'}`);
+    if (captionedImg && isValidHeroImageLight(captionedImg)) {
+      return extractImageData(captionedImg);
+    }
+
+    console.log('[Readr] No hero image found');
+    return null;
+  }
+
+  // Find an image that has a figcaption in a nearby container
+  // This catches cases like The Verge where figcaption exists without figure
+  function findImageWithNearbyCaptions() {
+    // Look for figcaptions in the main content area
+    const figcaptions = document.querySelectorAll('article figcaption, main figcaption, [role="main"] figcaption');
+
+    for (const caption of figcaptions) {
+      // Walk up to find a container that also has an img
+      let container = caption.parentElement;
+      let depth = 0;
+
+      while (container && depth < 4) {
+        const img = container.querySelector('img');
+        if (img && img !== caption.querySelector('img')) {
+          // Found an image in the same container as a figcaption
+          // Make sure it's near the top (first such image we find)
+          return img;
+        }
+        container = container.parentElement;
+        depth++;
+      }
     }
 
     return null;
@@ -312,73 +323,91 @@
     const aspectRatio = width / height;
     if (aspectRatio < 0.5 || aspectRatio > 4) return false;
 
+    // Square-ish images (0.85 to 1.15 ratio) are often logos, not article images
+    // Article hero images are typically landscape (16:9, 4:3, 3:2)
+    if (aspectRatio >= 0.85 && aspectRatio <= 1.15) return false;
+
+    // Run common checks
+    return isValidHeroImageLight(img);
+  }
+
+  // Lighter validation for images with strong signals (fetchpriority="high", nearby figcaption)
+  // Skips dimension checks since dimensions may not be available for CSS-sized images
+  function isValidHeroImageLight(img) {
     // Check if image is visible
     const style = window.getComputedStyle(img);
     if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+      console.log('[Readr] isValidHeroImageLight: rejected - not visible');
       return false;
     }
 
     // Skip images inside nav, header (site header), footer, aside
-    const parent = img.closest('nav, footer, aside, [role="navigation"], [role="banner"]');
-    if (parent) return false;
+    const parent = img.closest('nav, header, footer, aside, [role="navigation"], [role="banner"]');
+    if (parent) {
+      // console.log(`[Readr] isValidHeroImageLight: rejected - inside ${parent.tagName}`);
+      return false;
+    }
 
-    // Skip tiny images and icons
+    // Skip tiny images and icons based on URL/class
     const src = img.src || img.dataset.src || '';
-    if (isLikelyLogo(src)) return false;
+    if (isLikelyLogo(src)) {
+      console.log('[Readr] isValidHeroImageLight: rejected - isLikelyLogo(src)');
+      return false;
+    }
+
+    // Also check class name for logo indicators
+    const className = (img.className || '').toLowerCase();
+    if (className.includes('logo') || className.includes('brand') || className.includes('icon')) {
+      console.log('[Readr] isValidHeroImageLight: rejected - logo/brand/icon in class');
+      return false;
+    }
 
     // Skip lazy-load placeholders
-    if (src.includes('data:image/') && src.length < 1000) return false;
-    if (img.classList.contains('lazy') && !img.src) return false;
+    if (src.includes('data:image/') && src.length < 1000) {
+      console.log('[Readr] isValidHeroImageLight: rejected - data:image placeholder');
+      return false;
+    }
+    if (img.classList.contains('lazy') && !img.src) {
+      console.log('[Readr] isValidHeroImageLight: rejected - lazy without src');
+      return false;
+    }
 
+    console.log('[Readr] isValidHeroImageLight: passed all checks');
     return true;
   }
 
   function isLikelyLogo(url) {
     if (!url) return true;
     const lower = url.toLowerCase();
-    return lower.includes('logo') ||
-           lower.includes('icon') ||
-           lower.includes('avatar') ||
-           lower.includes('favicon') ||
-           lower.includes('badge') ||
-           lower.includes('sprite') ||
-           lower.includes('1x1') ||
-           lower.includes('pixel');
-  }
 
-  function calculateImageScore(img, rect) {
-    const width = img.naturalWidth || img.width || 0;
-    const height = img.naturalHeight || img.height || 0;
-
-    // Base score is area
-    let score = width * height;
-
-    // Bonus for images near the top of the page
-    if (rect.top < 600) {
-      score *= 1.5;
-    } else if (rect.top < 1200) {
-      score *= 1.2;
-    } else if (rect.top > 2000) {
-      score *= 0.5; // Penalize images far down the page
+    // Common logo/icon patterns in URLs
+    if (lower.includes('logo') ||
+        lower.includes('icon') ||
+        lower.includes('avatar') ||
+        lower.includes('favicon') ||
+        lower.includes('badge') ||
+        lower.includes('sprite') ||
+        lower.includes('1x1') ||
+        lower.includes('pixel') ||
+        lower.includes('profile') ||
+        lower.includes('brand')) {
+      return true;
     }
 
-    // Bonus for images with good aspect ratios (16:9 to 4:3)
-    const aspectRatio = width / height;
-    if (aspectRatio >= 1.3 && aspectRatio <= 1.8) {
-      score *= 1.3;
+    // Check for small dimension patterns in URLs (e.g., /32x32/, _64x64., -100x100)
+    // Match patterns like: 32x32, 64x64, 100x100, 128x128, 150x150, 200x200, etc.
+    const smallDimensionPattern = /[_\-\/]?(\d{2,3})x(\d{2,3})[_\-\.\/]/;
+    const match = lower.match(smallDimensionPattern);
+    if (match) {
+      const width = parseInt(match[1]);
+      const height = parseInt(match[2]);
+      // If both dimensions are under 300, it's likely a logo/icon
+      if (width < 300 && height < 300) {
+        return true;
+      }
     }
 
-    // Bonus for images inside article or main
-    if (img.closest('article, main, [role="main"]')) {
-      score *= 1.4;
-    }
-
-    // Bonus for images with alt text (suggests editorial content)
-    if (img.alt && img.alt.length > 10) {
-      score *= 1.2;
-    }
-
-    return score;
+    return false;
   }
 
   function extractImageData(img) {
@@ -387,11 +416,28 @@
 
     // Try to find caption
     let caption = '';
+
+    // First check if inside a figure
     const figure = img.closest('figure');
     if (figure) {
       const figcaption = figure.querySelector('figcaption');
       if (figcaption) {
         caption = figcaption.textContent.trim();
+      }
+    }
+
+    // If no caption yet, look for figcaption in nearby container
+    // (handles sites like The Verge that use figcaption without figure)
+    if (!caption) {
+      let container = img.parentElement;
+      let depth = 0;
+      while (container && depth < 4 && !caption) {
+        const figcaption = container.querySelector('figcaption');
+        if (figcaption) {
+          caption = figcaption.textContent.trim();
+        }
+        container = container.parentElement;
+        depth++;
       }
     }
 
@@ -410,13 +456,38 @@
     }
   }
 
+  // Check if a hero image (by URL) is already in the first few elements of content
+  function isHeroImageInContent(heroSrc, content) {
+    if (!heroSrc) return false;
+
+    const temp = document.createElement('div');
+    temp.innerHTML = content;
+
+    // Check first 3 top-level elements for this specific image
+    const firstElements = temp.querySelectorAll(':scope > *:nth-child(-n+3)');
+    for (const el of firstElements) {
+      const imgs = el.tagName === 'IMG' ? [el] : el.querySelectorAll('img');
+      for (const img of imgs) {
+        const imgSrc = img.src || img.getAttribute('src') || '';
+        // Compare base URLs (ignore query params which may differ)
+        const heroBase = heroSrc.split('?')[0];
+        const imgBase = imgSrc.split('?')[0];
+        if (heroBase && imgBase && heroBase === imgBase) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   function checkForLeadImage(content) {
     // Check if the article content has a legitimate lead image near the start
     const temp = document.createElement('div');
     temp.innerHTML = content;
 
-    // Look for images in the first few elements
-    const firstElements = temp.querySelectorAll(':scope > *:nth-child(-n+5)');
+    // Only check the first 3 top-level elements for a lead image
+    // If the image isn't in the first few elements, it's not a lead image
+    const firstElements = temp.querySelectorAll(':scope > *:nth-child(-n+3)');
     for (const el of firstElements) {
       let img = null;
 
@@ -425,28 +496,21 @@
       } else if (el.tagName === 'FIGURE') {
         img = el.querySelector('img');
       } else {
-        img = el.querySelector('img');
+        // Check if this element contains an image AND has minimal text
+        // (to avoid matching paragraphs that happen to have inline images)
+        const elText = el.textContent?.trim() || '';
+        if (elText.length < 50) {
+          img = el.querySelector('img');
+        }
       }
 
       if (img && isLikelyLeadImage(img)) {
+        // console.log(`[Readr] checkForLeadImage: found lead image in first elements: ${img.src?.substring(0, 80)}...`);
         return true;
       }
     }
 
-    // Also check if there's a lead image that appears before much text
-    const allImages = temp.querySelectorAll('img');
-    for (const img of allImages) {
-      if (!isLikelyLeadImage(img)) continue;
-
-      // Check position in the HTML - if image appears early, it's likely a lead
-      const imgIndex = temp.innerHTML.indexOf(img.outerHTML);
-      const textBefore = temp.textContent.substring(0, imgIndex);
-      if (textBefore.trim().length < 150) {
-        return true;
-      }
-      break; // Only check the first valid image
-    }
-
+    console.log('[Readr] checkForLeadImage: no lead image found in first 3 elements');
     return false;
   }
 
@@ -681,6 +745,10 @@
         content: "\\2022";
         margin-right: 16px;
         opacity: 0.5;
+      }
+
+      .readr-site-only::before {
+        content: none;
       }
 
       /* Hero image */
