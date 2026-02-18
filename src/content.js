@@ -39,7 +39,9 @@
   }
 
   // Clean up trailing structural elements (hr, headings without content)
-  const cleanedContent = trimTrailingStructuralElements(article.content);
+  // Also remove tiny images (avatars, icons) that don't belong in article content
+  let cleanedContent = trimTrailingStructuralElements(article.content);
+  cleanedContent = removeTinyImages(cleanedContent);
 
   // Build the reader view
   const readerHTML = `
@@ -67,6 +69,7 @@
               ${article.siteName ? `<span class="readr-site${cleanedByline ? '' : ' readr-site-only'}">${escapeHTML(article.siteName)}</span>` : ""}
             </div>
             ` : ""}
+            ${article.excerpt ? `<p class="readr-excerpt">${escapeHTML(article.excerpt)}</p>` : ""}
           </header>
           ${heroImageHTML}
           <div class="readr-content">
@@ -92,6 +95,69 @@
       exitReaderMode();
     }
   });
+
+  // DEBUG: Add test overlay showing raw Readability output
+  // const debugOverlay = document.createElement('div');
+  // debugOverlay.id = 'readr-debug';
+  // debugOverlay.innerHTML = `
+  //   <style>
+  //     #readr-debug {
+  //       position: fixed;
+  //       bottom: 20px;
+  //       right: 20px;
+  //       width: 500px;
+  //       max-height: 80vh;
+  //       background: #1e1e1e;
+  //       color: #e8e8e8;
+  //       border-radius: 8px;
+  //       box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  //       font-family: monospace;
+  //       font-size: 12px;
+  //       z-index: 10000;
+  //       overflow: hidden;
+  //     }
+  //     #readr-debug-header {
+  //       padding: 10px 14px;
+  //       background: #333;
+  //       font-weight: bold;
+  //       cursor: pointer;
+  //       display: flex;
+  //       justify-content: space-between;
+  //     }
+  //     #readr-debug-content {
+  //       padding: 14px;
+  //       overflow: auto;
+  //       max-height: calc(80vh - 40px);
+  //     }
+  //     #readr-debug pre {
+  //       margin: 0;
+  //       white-space: pre-wrap;
+  //       word-break: break-all;
+  //     }
+  //     #readr-debug h4 {
+  //       margin: 12px 0 6px;
+  //       color: #6bb8ff;
+  //     }
+  //     #readr-debug h4:first-child { margin-top: 0; }
+  //   </style>
+  //   <div id="readr-debug-header">
+  //     <span>Readability Raw Output</span>
+  //     <span onclick="document.getElementById('readr-debug').remove()">✕</span>
+  //   </div>
+  //   <div id="readr-debug-content">
+  //     <h4>title</h4>
+  //     <pre>${escapeHTML(article.title)}</pre>
+  //     <h4>byline</h4>
+  //     <pre>${escapeHTML(article.byline || '(none)')}</pre>
+  //     <h4>siteName</h4>
+  //     <pre>${escapeHTML(article.siteName || '(none)')}</pre>
+  //     <h4>excerpt</h4>
+  //     <pre>${escapeHTML(article.excerpt || '(none)')}</pre>
+  //     <h4>content (raw HTML)</h4>
+  //     <pre>${escapeHTML(article.content)}</pre>
+  //   </div>
+  // `;
+  // document.body.appendChild(debugOverlay);
 
   function exitReaderMode() {
     sessionStorage.removeItem("__readrActive");
@@ -164,6 +230,51 @@
     }
 
     return temp.innerHTML;
+  }
+
+  // Remove tiny images and orphaned author bios from article content
+  function removeTinyImages(html) {
+    const temp = document.createElement('div');
+    temp.innerHTML = html;
+
+    // 1. Remove images with explicit small dimensions (e.g., 36x36 avatars)
+    const images = temp.querySelectorAll('img');
+    for (const img of images) {
+      const width = parseInt(img.getAttribute('width')) || 0;
+      const height = parseInt(img.getAttribute('height')) || 0;
+
+      if ((width > 0 && width <= 100) || (height > 0 && height <= 100)) {
+        removeElementAndCleanup(img);
+      }
+    }
+
+    // 2. Remove orphaned author bios - paragraphs starting with "is a [job title]"
+    // This happens when Readability extracts the author name to byline but leaves the bio
+    const paragraphs = temp.querySelectorAll('p');
+    for (const p of paragraphs) {
+      const text = p.textContent.trim();
+      // Match "is a [optional adjective] [job title]" at the start
+      if (/^is an?\s+(\w+\s+)?(writer|editor|reporter|journalist|correspondent|contributor|columnist|critic|analyst|producer|photographer|author)\b/i.test(text)) {
+        removeElementAndCleanup(p);
+      }
+    }
+
+    return temp.innerHTML;
+  }
+
+  // Remove an element and clean up empty parent containers
+  function removeElementAndCleanup(el) {
+    let parent = el.parentElement;
+    el.remove();
+
+    // Walk up and remove empty containers
+    while (parent && !parent.textContent.trim() && !parent.querySelector('img, video, iframe')) {
+      const grandparent = parent.parentElement;
+      // Don't remove the main content wrapper
+      if (parent.id === 'readability-page-1' || parent.classList.contains('page')) break;
+      parent.remove();
+      parent = grandparent;
+    }
   }
 
   // Clean up byline that may have concatenated metadata
@@ -749,6 +860,14 @@
 
       .readr-site-only::before {
         content: none;
+      }
+
+      .readr-excerpt {
+        margin: 16px 0 0;
+        color: var(--reader-text-secondary);
+        font-size: 0.9rem;
+        font-style: italic;
+        line-height: 1.5;
       }
 
       /* Hero image */

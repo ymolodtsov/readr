@@ -37,3 +37,20 @@ Load as unpacked extension in Chrome:
 1. Go to `chrome://extensions`
 2. Enable "Developer mode"
 3. Click "Load unpacked" and select this directory
+
+## Optional: Restorable Overlay Approach
+
+The current implementation replaces page content entirely (`document.write`), requiring a page reload to exit reader mode.
+
+A "restorable" overlay approach was explored where the original page is preserved behind a fixed overlay, allowing instant exit without reload. However, this causes a visible scroll jump when engaging reader mode.
+
+
+
+1. **Reorder operations + scrollbar compensation** - Add overlay before applying scroll lock, plus `width: 100%` and `paddingRight` on body to compensate for scrollbar disappearing. Result: Broke list bullet point styling in reader view.
+
+2. **Reorder operations only** - Add overlay before scroll lock, keeping original CSS (`left`/`right` instead of `width`/`paddingRight`). Result: Did not fix the scroll jump.
+
+The `position: fixed` with negative `top` approach causes a visible flash regardless of operation order. May revisit with a different scroll-lock technique in the future.
+
+
+Do not try to go this route again unless the user specifically requests it. 

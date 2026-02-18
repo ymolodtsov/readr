@@ -2,3 +2,4 @@
 *.log
 .venv/
 node_modules/
+readr.zip
