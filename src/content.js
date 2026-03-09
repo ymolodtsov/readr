@@ -10,8 +10,19 @@
   // Mark that we're in reader mode (for toggle detection)
   sessionStorage.setItem("__readrActive", "true");
 
+  // Detect text direction (RTL vs LTR)
+  const docDir = document.documentElement.dir ||
+                 document.body.dir ||
+                 window.getComputedStyle(document.body).direction ||
+                 'ltr';
+
   // Clone the document for Readability parsing
   const documentClone = document.cloneNode(true);
+
+  // Preprocess: Convert image wrapper divs to figures
+  // Readability's negative regex matches "media" in class names like "media-wrapper",
+  // causing it to strip these divs. Converting to <figure> gives them protection.
+  preprocessImageContainers(documentClone);
 
   // Parse the article using Readability
   const reader = new Readability(documentClone);
@@ -26,27 +37,27 @@
   // Clean up the byline (Readability sometimes concatenates metadata)
   const cleanedByline = cleanByline(article.byline);
 
-  // Look for hero image, but skip if the same image is already at the start of Readability's content
+  // Look for hero image, but skip if the content already starts with an image
   let heroImageHTML = '';
-  const heroImage = findHeroImage();
-  // console.log(`[Readr] findHeroImage returned: ${heroImage ? heroImage.src?.substring(0, 60) + '...' : 'null'}`);
-  if (heroImage) {
-    const isDuplicate = isHeroImageInContent(heroImage.src, article.content);
-    // console.log(`[Readr] isHeroImageInContent: ${isDuplicate}`);
-    if (!isDuplicate) {
+  const contentHasLeadImage = checkForLeadImage(article.content);
+  if (!contentHasLeadImage) {
+    const heroImage = findHeroImage();
+    if (heroImage) {
       heroImageHTML = `<figure class="readr-hero"><img src="${escapeAttr(heroImage.src)}" alt="${escapeAttr(heroImage.alt || '')}">${heroImage.caption ? `<figcaption>${escapeHTML(heroImage.caption)}</figcaption>` : ''}</figure>`;
     }
   }
 
-  // Clean up trailing structural elements (hr, headings without content)
-  // Also remove tiny images (avatars, icons) that don't belong in article content
+  // Clean up the article content
   let cleanedContent = trimTrailingStructuralElements(article.content);
   cleanedContent = removeTinyImages(cleanedContent);
+  cleanedContent = removeOrphanedBios(cleanedContent);
+  cleanedContent = removeImageOnlyParagraphs(cleanedContent);
+  cleanedContent = deduplicateImages(cleanedContent);
 
   // Build the reader view
   const readerHTML = `
     <!DOCTYPE html>
-    <html lang="${document.documentElement.lang || "en"}">
+    <html lang="${document.documentElement.lang || "en"}" dir="${docDir}">
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -123,7 +134,19 @@
   //       cursor: pointer;
   //       display: flex;
   //       justify-content: space-between;
+  //       gap: 12px;
   //     }
+  //     #readr-debug-header span:last-child { cursor: pointer; }
+  //     #readr-debug-copy {
+  //       background: #555;
+  //       border: none;
+  //       color: #e8e8e8;
+  //       padding: 2px 8px;
+  //       border-radius: 4px;
+  //       cursor: pointer;
+  //       font-size: 11px;
+  //     }
+  //     #readr-debug-copy:hover { background: #666; }
   //     #readr-debug-content {
   //       padding: 14px;
   //       overflow: auto;
@@ -142,6 +165,7 @@
   //   </style>
   //   <div id="readr-debug-header">
   //     <span>Readability Raw Output</span>
+  //     <button id="readr-debug-copy">Copy</button>
   //     <span onclick="document.getElementById('readr-debug').remove()">✕</span>
   //   </div>
   //   <div id="readr-debug-content">
@@ -158,6 +182,15 @@
   //   </div>
   // `;
   // document.body.appendChild(debugOverlay);
+  // document.getElementById('readr-debug-copy').addEventListener('click', () => {
+  //   const text = document.getElementById('readr-debug-content').innerText;
+  //   navigator.clipboard.writeText(text).then(() => {
+  //     document.getElementById('readr-debug-copy').textContent = 'Copied!';
+  //     setTimeout(() => {
+  //       document.getElementById('readr-debug-copy').textContent = 'Copy';
+  //     }, 1500);
+  //   });
+  // });
 
   function exitReaderMode() {
     sessionStorage.removeItem("__readrActive");
@@ -232,12 +265,11 @@
     return temp.innerHTML;
   }
 
-  // Remove tiny images and orphaned author bios from article content
+  // Remove images with explicit small dimensions (e.g., 36x36 avatars)
   function removeTinyImages(html) {
     const temp = document.createElement('div');
     temp.innerHTML = html;
 
-    // 1. Remove images with explicit small dimensions (e.g., 36x36 avatars)
     const images = temp.querySelectorAll('img');
     for (const img of images) {
       const width = parseInt(img.getAttribute('width')) || 0;
@@ -248,14 +280,119 @@
       }
     }
 
-    // 2. Remove orphaned author bios - paragraphs starting with "is a [job title]"
-    // This happens when Readability extracts the author name to byline but leaves the bio
+    return temp.innerHTML;
+  }
+
+  // Remove orphaned author bios - paragraphs starting with "is [job title]"
+  // This happens when Readability extracts the author name to byline but leaves the bio
+  function removeOrphanedBios(html) {
+    const temp = document.createElement('div');
+    temp.innerHTML = html;
+
     const paragraphs = temp.querySelectorAll('p');
     for (const p of paragraphs) {
       const text = p.textContent.trim();
-      // Match "is a [optional adjective] [job title]" at the start
-      if (/^is an?\s+(\w+\s+)?(writer|editor|reporter|journalist|correspondent|contributor|columnist|critic|analyst|producer|photographer|author)\b/i.test(text)) {
+      // Match "is [optional a/an] [optional adjective] [job title]" at the start
+      if (/^is\s+(an?\s+)?(\w+[\s-])*?(editor|writer|reporter|journalist|correspondent|contributor|columnist|critic|analyst|producer|photographer|author|host|co-host)\b/i.test(text)) {
         removeElementAndCleanup(p);
+      }
+    }
+
+    return temp.innerHTML;
+  }
+
+  // Remove paragraphs that contain only "Image" text (leftover from image alt/caption extraction)
+  function removeImageOnlyParagraphs(html) {
+    const temp = document.createElement('div');
+    temp.innerHTML = html;
+
+    const paragraphs = temp.querySelectorAll('p');
+    for (const p of paragraphs) {
+      const text = p.textContent.trim();
+      if (text === 'Image') {
+        removeElementAndCleanup(p);
+      }
+    }
+
+    return temp.innerHTML;
+  }
+
+  // Unwrap custom image elements and remove nearby duplicate images
+  function deduplicateImages(html) {
+    const temp = document.createElement('div');
+    temp.innerHTML = html;
+
+    // First, unwrap custom image wrapper elements like <progressive-image>
+    // These can cause duplicate rendering (the wrapper + the inner img)
+    const customWrappers = temp.querySelectorAll('progressive-image, lazy-image, [data-progressive-image]');
+    for (const wrapper of customWrappers) {
+      const img = wrapper.querySelector('img');
+      if (img) {
+        wrapper.replaceWith(img);
+      } else {
+        wrapper.remove();
+      }
+    }
+
+    // Remove duplicate images only if they appear close together (within 3 elements)
+    // This catches double-extraction bugs without breaking legitimate repeated images
+    const images = Array.from(temp.querySelectorAll('img'));
+
+    function getImageId(img) {
+      const src = img.src || img.getAttribute('src') || '';
+      if (!src) return null;
+      const match = src.match(/([^\/]+\.(jpg|jpeg|png|gif|webp|avif))/i);
+      return match ? match[1].toLowerCase() : src.split('?')[0].toLowerCase();
+    }
+
+    function getElementIndex(el) {
+      // Get a rough position in the document by counting preceding elements
+      let count = 0;
+      let node = el;
+      while (node) {
+        node = node.previousElementSibling;
+        count++;
+      }
+      // Also factor in parent depth
+      let parent = el.parentElement;
+      while (parent && parent !== temp) {
+        let parentCount = 0;
+        let pNode = parent;
+        while (pNode) {
+          pNode = pNode.previousElementSibling;
+          parentCount++;
+        }
+        count += parentCount * 10; // Weight parent position more
+        parent = parent.parentElement;
+      }
+      return count;
+    }
+
+    // Build a map of image ID to list of {img, index}
+    const imageMap = new Map();
+    for (const img of images) {
+      const id = getImageId(img);
+      if (!id) continue;
+      const index = getElementIndex(img);
+      if (!imageMap.has(id)) {
+        imageMap.set(id, []);
+      }
+      imageMap.get(id).push({ img, index });
+    }
+
+    // For each duplicate group, remove images that are close to an earlier one
+    for (const [id, occurrences] of imageMap) {
+      if (occurrences.length < 2) continue;
+
+      // Sort by index
+      occurrences.sort((a, b) => a.index - b.index);
+
+      // Remove duplicates that are within 30 index units of a previous occurrence
+      for (let i = 1; i < occurrences.length; i++) {
+        const gap = occurrences[i].index - occurrences[i - 1].index;
+        if (gap < 30) {
+          removeElementAndCleanup(occurrences[i].img);
+        }
       }
     }
 
@@ -264,16 +401,29 @@
 
   // Remove an element and clean up empty parent containers
   function removeElementAndCleanup(el) {
+    if (!el || !el.parentElement) return;
+
     let parent = el.parentElement;
     el.remove();
 
-    // Walk up and remove empty containers
-    while (parent && !parent.textContent.trim() && !parent.querySelector('img, video, iframe')) {
-      const grandparent = parent.parentElement;
+    // Walk up and remove empty containers (with depth limit to prevent infinite loops)
+    let depth = 0;
+    const maxDepth = 20;
+    const seen = new Set();
+
+    while (parent && depth < maxDepth && !seen.has(parent)) {
+      seen.add(parent);
+
       // Don't remove the main content wrapper
       if (parent.id === 'readability-page-1' || parent.classList.contains('page')) break;
+
+      // Stop if parent has content
+      if (parent.textContent.trim() || parent.querySelector('img, video, iframe')) break;
+
+      const grandparent = parent.parentElement;
       parent.remove();
       parent = grandparent;
+      depth++;
     }
   }
 
@@ -282,6 +432,12 @@
     if (!byline) return '';
 
     let cleaned = byline;
+
+    // Check if this is actually an orphaned bio fragment (no author name)
+    // e.g., "is editor-at-large and Vergecast co-host..." without the name
+    if (/^is\s+(an?\s+)?(\w+[\s-])*?(editor|writer|reporter|journalist|correspondent|contributor|columnist|critic|analyst|producer|photographer|author|host|co-host)\b/i.test(cleaned)) {
+      return '';
+    }
 
     // Remove common date/time patterns that get concatenated
     // "Publishedyesterday" "Updated08:01" etc.
@@ -326,7 +482,8 @@
       ];
       const bestBreak = Math.max(...breakPoints);
       if (bestBreak > 50) {
-        cleaned = cleaned.substring(0, bestBreak + (cleaned.charAt(bestBreak) === ',' ? 0 : 4));
+        // Truncate before the separator
+        cleaned = cleaned.substring(0, bestBreak).trim();
       } else {
         cleaned = cleaned.substring(0, 150).trim();
       }
@@ -344,8 +501,6 @@
   // Conservative approach: only use strong semantic signals
   // We'd rather show no hero than show a wrong image (logo, brand image, etc.)
   function findHeroImage() {
-    console.log('[Readr] findHeroImage called');
-
     // 1. Look for images in semantic figure elements within article content
     const figureSelectors = [
       'article figure:first-of-type img',
@@ -360,8 +515,6 @@
           // console.log(`[Readr] Found figure img with selector: ${selector}`);
           if (isValidHeroImage(img)) {
             return extractImageData(img);
-          } else {
-            console.log('[Readr] Figure img failed isValidHeroImage');
           }
         }
       } catch (e) {
@@ -375,24 +528,18 @@
     const priorityImgs = document.querySelectorAll('img[fetchpriority="high"]');
     // console.log(`[Readr] Found ${priorityImgs.length} img(s) with fetchpriority="high"`);
     for (const img of priorityImgs) {
-      // console.log(`[Readr] Checking priority img: ${img.src?.substring(0, 60)}...`);
       if (isValidHeroImageLight(img)) {
-        console.log('[Readr] Priority img passed validation');
         return extractImageData(img);
-      } else {
-        console.log('[Readr] Priority img failed isValidHeroImageLight');
       }
     }
 
     // 3. Look for images that have a figcaption nearby (semantic caption signal)
     // Sites like The Verge use figcaption without figure wrapper
     const captionedImg = findImageWithNearbyCaptions();
-    // console.log(`[Readr] findImageWithNearbyCaptions returned: ${captionedImg ? 'img found' : 'null'}`);
     if (captionedImg && isValidHeroImageLight(captionedImg)) {
       return extractImageData(captionedImg);
     }
 
-    console.log('[Readr] No hero image found');
     return null;
   }
 
@@ -434,9 +581,9 @@
     const aspectRatio = width / height;
     if (aspectRatio < 0.5 || aspectRatio > 4) return false;
 
-    // Square-ish images (0.85 to 1.15 ratio) are often logos, not article images
-    // Article hero images are typically landscape (16:9, 4:3, 3:2)
-    if (aspectRatio >= 0.85 && aspectRatio <= 1.15) return false;
+    // Square-ish images (0.85 to 1.15 ratio) are often logos or profile pics, not article images
+    // But only reject if they're small - large square images can be legitimate hero images
+    if (aspectRatio >= 0.85 && aspectRatio <= 1.15 && width < 600) return false;
 
     // Run common checks
     return isValidHeroImageLight(img);
@@ -446,44 +593,42 @@
   // Skips dimension checks since dimensions may not be available for CSS-sized images
   function isValidHeroImageLight(img) {
     // Check if image is visible
-    const style = window.getComputedStyle(img);
-    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
-      console.log('[Readr] isValidHeroImageLight: rejected - not visible');
+    try {
+      const style = window.getComputedStyle(img);
+      if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+        return false;
+      }
+    } catch (e) {
+      // getComputedStyle can fail on detached elements
       return false;
     }
 
     // Skip images inside nav, header (site header), footer, aside
     const parent = img.closest('nav, header, footer, aside, [role="navigation"], [role="banner"]');
     if (parent) {
-      // console.log(`[Readr] isValidHeroImageLight: rejected - inside ${parent.tagName}`);
       return false;
     }
 
     // Skip tiny images and icons based on URL/class
     const src = img.src || img.dataset.src || '';
     if (isLikelyLogo(src)) {
-      console.log('[Readr] isValidHeroImageLight: rejected - isLikelyLogo(src)');
       return false;
     }
 
     // Also check class name for logo indicators
     const className = (img.className || '').toLowerCase();
     if (className.includes('logo') || className.includes('brand') || className.includes('icon')) {
-      console.log('[Readr] isValidHeroImageLight: rejected - logo/brand/icon in class');
       return false;
     }
 
     // Skip lazy-load placeholders
     if (src.includes('data:image/') && src.length < 1000) {
-      console.log('[Readr] isValidHeroImageLight: rejected - data:image placeholder');
       return false;
     }
     if (img.classList.contains('lazy') && !img.src) {
-      console.log('[Readr] isValidHeroImageLight: rejected - lazy without src');
       return false;
     }
 
-    console.log('[Readr] isValidHeroImageLight: passed all checks');
     return true;
   }
 
@@ -567,132 +712,100 @@
     }
   }
 
-  // Check if a hero image (by URL) is already in the first few elements of content
-  function isHeroImageInContent(heroSrc, content) {
-    if (!heroSrc) return false;
-
-    const temp = document.createElement('div');
-    temp.innerHTML = content;
-
-    // Check first 3 top-level elements for this specific image
-    const firstElements = temp.querySelectorAll(':scope > *:nth-child(-n+3)');
-    for (const el of firstElements) {
-      const imgs = el.tagName === 'IMG' ? [el] : el.querySelectorAll('img');
-      for (const img of imgs) {
-        const imgSrc = img.src || img.getAttribute('src') || '';
-        // Compare base URLs (ignore query params which may differ)
-        const heroBase = heroSrc.split('?')[0];
-        const imgBase = imgSrc.split('?')[0];
-        if (heroBase && imgBase && heroBase === imgBase) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
   function checkForLeadImage(content) {
-    // Check if the article content has a legitimate lead image near the start
+    // Check if the article content starts with an image (figure or img)
     const temp = document.createElement('div');
     temp.innerHTML = content;
 
-    // Only check the first 3 top-level elements for a lead image
-    // If the image isn't in the first few elements, it's not a lead image
-    const firstElements = temp.querySelectorAll(':scope > *:nth-child(-n+3)');
-    for (const el of firstElements) {
-      let img = null;
+    // Walk the DOM to find the first "content" element (skipping wrapper divs)
+    // Content elements are: p, figure, img, h1-h6, blockquote, ul, ol, table, pre
+    const contentTags = ['P', 'FIGURE', 'IMG', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'UL', 'OL', 'TABLE', 'PRE'];
 
-      if (el.tagName === 'IMG') {
-        img = el;
-      } else if (el.tagName === 'FIGURE') {
-        img = el.querySelector('img');
-      } else {
-        // Check if this element contains an image AND has minimal text
-        // (to avoid matching paragraphs that happen to have inline images)
-        const elText = el.textContent?.trim() || '';
-        if (elText.length < 50) {
-          img = el.querySelector('img');
+    function findFirstContentElement(el) {
+      for (const child of el.children) {
+        if (contentTags.includes(child.tagName)) {
+          return child;
+        }
+        // If it's a div/section/article, look inside it
+        if (['DIV', 'SECTION', 'ARTICLE'].includes(child.tagName)) {
+          const found = findFirstContentElement(child);
+          if (found) return found;
         }
       }
-
-      if (img && isLikelyLeadImage(img)) {
-        // console.log(`[Readr] checkForLeadImage: found lead image in first elements: ${img.src?.substring(0, 80)}...`);
-        return true;
-      }
+      return null;
     }
 
-    console.log('[Readr] checkForLeadImage: no lead image found in first 3 elements');
+    const firstContent = findFirstContentElement(temp);
+    if (!firstContent) return false;
+
+    // Check if the first content element is an image or figure with image
+    if (firstContent.tagName === 'IMG') {
+      return true;
+    }
+    if (firstContent.tagName === 'FIGURE' && firstContent.querySelector('img')) {
+      return true;
+    }
+
     return false;
   }
 
-  function isLikelyLeadImage(img) {
-    // Check if an image is likely a lead/hero image vs logo/avatar/author photo
+  // Preprocess image containers to prevent Readability from stripping them
+  // Converts divs with "media" in class name to <figure> elements
+  function preprocessImageContainers(doc) {
+    // Readability's negative pattern includes "media", which strips divs like "media-wrapper"
+    // Find divs that contain images and have problematic class names
+    const mediaPattern = /media|image-container|img-wrapper|photo-wrapper/i;
+    const divs = doc.querySelectorAll('div');
 
-    const src = (img.src || img.dataset.src || '').toLowerCase();
-    const alt = (img.alt || '').toLowerCase();
-    const className = (img.className || '').toLowerCase();
-    const parentClass = (img.parentElement?.className || '').toLowerCase();
+    for (const div of divs) {
+      const className = div.className || '';
+      if (!mediaPattern.test(className)) continue;
 
-    // Skip obvious non-lead images based on class names
-    const skipClasses = ['avatar', 'author', 'profile', 'logo', 'icon', 'thumbnail', 'thumb', 'gravatar', 'photo-author', 'byline'];
-    for (const skip of skipClasses) {
-      if (className.includes(skip) || parentClass.includes(skip)) {
-        return false;
+      // Check if this div contains an image
+      const img = div.querySelector('img');
+      if (!img) continue;
+
+      // Remove "view full size" links and other icon-only links before converting
+      const iconLinks = div.querySelectorAll('a svg, a[class*="full-size"], a[class*="zoom"], a[class*="expand"]');
+      for (const el of iconLinks) {
+        // Remove the parent link if it only contains an SVG
+        const link = el.closest('a');
+        if (link && link.querySelector('svg') && !link.textContent.trim()) {
+          link.remove();
+        } else if (el.tagName === 'svg') {
+          el.remove();
+        }
       }
-    }
 
-    // Skip based on alt text
-    const skipAltPatterns = ['avatar', 'author', 'profile', 'headshot', 'portrait', 'logo', 'icon'];
-    for (const pattern of skipAltPatterns) {
-      if (alt.includes(pattern)) {
-        return false;
+      // Convert div to figure
+      const figure = doc.createElement('figure');
+
+      // Copy attributes except class (to avoid triggering negative patterns)
+      for (const attr of div.attributes) {
+        if (attr.name !== 'class') {
+          figure.setAttribute(attr.name, attr.value);
+        }
       }
-    }
 
-    // Skip based on URL patterns
-    const skipUrlPatterns = ['avatar', 'author', 'profile', 'gravatar', 'logo', 'icon', 'favicon', 'badge', 'thumb', 'thumbnail', '50x50', '64x64', '96x96', '100x100', '128x128', '150x150'];
-    for (const pattern of skipUrlPatterns) {
-      if (src.includes(pattern)) {
-        return false;
+      // Move children to figure
+      while (div.firstChild) {
+        const child = div.firstChild;
+
+        // Convert caption paragraphs to figcaption
+        if (child.nodeType === 1 && child.tagName === 'P' &&
+            /caption|credit/i.test(child.className || '')) {
+          const figcaption = doc.createElement('figcaption');
+          figcaption.innerHTML = child.innerHTML;
+          figure.appendChild(figcaption);
+          child.remove();
+        } else {
+          figure.appendChild(child);
+        }
       }
+
+      // Replace the div with the figure
+      div.parentNode.replaceChild(figure, div);
     }
-
-    // Check explicit dimensions if available
-    const width = parseInt(img.getAttribute('width')) || 0;
-    const height = parseInt(img.getAttribute('height')) || 0;
-
-    // If dimensions are set and small, it's not a lead image
-    if ((width > 0 && width < 200) || (height > 0 && height < 150)) {
-      return false;
-    }
-
-    // If dimensions are set and large enough, it's likely a lead image
-    if (width >= 400 || height >= 250) {
-      return true;
-    }
-
-    // Check if inside a figure (strong signal for lead image)
-    if (img.closest('figure')) {
-      return true;
-    }
-
-    // Check parent context - skip if in author/byline sections
-    const parent = img.parentElement;
-    if (parent) {
-      const parentTag = parent.tagName.toLowerCase();
-      const parentText = parent.textContent || '';
-
-      // If the parent has very little text and isn't a figure, might be a standalone small image
-      if (parentTag === 'p' && parentText.trim().length < 20) {
-        // Could be a small inline image, be cautious
-        // But if no dimensions are specified, give it benefit of the doubt
-        return width === 0 && height === 0;
-      }
-    }
-
-    // Default: if we can't determine, assume it might be a lead image
-    // (better to not add a duplicate hero than to miss that there's already one)
-    return true;
   }
 
   // Helper function to escape HTML
@@ -787,7 +900,7 @@
       .readr-close {
         position: fixed;
         top: 20px;
-        right: 20px;
+        inset-inline-end: 20px;
         width: 36px;
         height: 36px;
         border: none;
@@ -854,7 +967,7 @@
 
       .readr-site::before {
         content: "\\2022";
-        margin-right: 16px;
+        margin-inline-end: 16px;
         opacity: 0.5;
       }
 
@@ -942,8 +1055,9 @@
 
       .readr-content blockquote {
         margin: 1.5em 0;
-        padding: 0 0 0 20px;
-        border-left: 3px solid var(--reader-blockquote-border);
+        padding: 0;
+        padding-inline-start: 20px;
+        border-inline-start: 3px solid var(--reader-blockquote-border);
         color: var(--reader-text-secondary);
         font-style: italic;
       }
@@ -977,7 +1091,7 @@
 
       .readr-content ul, .readr-content ol {
         margin: 1.4em 0;
-        padding-left: 1.5em;
+        padding-inline-start: 1.5em;
       }
 
       .readr-content li { margin-bottom: 0.4em; }
@@ -992,7 +1106,7 @@
 
       .readr-content th, .readr-content td {
         padding: 12px 16px;
-        text-align: left;
+        text-align: start;
         border-bottom: 1px solid var(--reader-border);
       }
 
@@ -1081,7 +1195,7 @@
 
         .readr-close {
           top: 12px;
-          right: 12px;
+          inset-inline-end: 12px;
           width: 32px;
           height: 32px;
         }

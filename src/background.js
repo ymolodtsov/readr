@@ -1,6 +1,9 @@
 // Readr - Background Service Worker
 // Handles extension icon click and injects content script
 
+// Set uninstall survey URL
+chrome.runtime.setUninstallURL('https://tally.so/r/RGzPAP');
+
 chrome.action.onClicked.addListener(async (tab) => {
   // Don't run on chrome:// or edge:// pages
   if (tab.url.startsWith("chrome://") || tab.url.startsWith("edge://") ||

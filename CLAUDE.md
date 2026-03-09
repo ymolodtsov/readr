@@ -53,4 +53,14 @@ A "restorable" overlay approach was explored where the original page is preserve
 The `position: fixed` with negative `top` approach causes a visible flash regardless of operation order. May revisit with a different scroll-lock technique in the future.
 
 
-Do not try to go this route again unless the user specifically requests it. 
+Do not try to go this route again unless the user specifically requests it.
+
+## Image Container Preprocessing (Experimental)
+
+Added `preprocessImageContainers()` in content.js to fix images being stripped on sites like MacStories.
+
+**Problem**: Readability's negative regex includes "media", so `div.media-wrapper` elements get stripped even when they contain legitimate article images.
+
+**Solution**: Before running Readability, convert divs matching `/media|image-container|img-wrapper|photo-wrapper/i` that contain images into `<figure>` elements. Also strips SVG-only links (like "view full size" icons) from these containers.
+
+**Status**: Under testing. May need to be removed or refined if it causes issues on other sites.
