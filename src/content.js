@@ -53,6 +53,7 @@
   cleanedContent = removeOrphanedBios(cleanedContent);
   cleanedContent = removeImageOnlyParagraphs(cleanedContent);
   cleanedContent = deduplicateImages(cleanedContent);
+  cleanedContent = wrapTables(cleanedContent);
 
   // Build the reader view
   const readerHTML = `
@@ -106,6 +107,9 @@
       exitReaderMode();
     }
   });
+
+  // Set up scrollable table indicators
+  setupTableScrollIndicators();
 
   // DEBUG: Add test overlay showing raw Readability output
   // const debugOverlay = document.createElement('div');
@@ -195,6 +199,32 @@
   function exitReaderMode() {
     sessionStorage.removeItem("__readrActive");
     location.reload();
+  }
+
+  // Set up scroll indicators for table wrappers
+  function setupTableScrollIndicators() {
+    const containers = document.querySelectorAll('.readr-table-container');
+
+    for (const container of containers) {
+      const scroll = container.querySelector('.readr-table-scroll');
+      if (!scroll) continue;
+
+      const checkScroll = () => {
+        const isScrollable = scroll.scrollWidth > scroll.clientWidth;
+        const isScrolledEnd = scroll.scrollLeft + scroll.clientWidth >= scroll.scrollWidth - 5;
+
+        container.classList.toggle('is-scrollable', isScrollable && !isScrolledEnd);
+      };
+
+      // Check initially
+      checkScroll();
+
+      // Check on scroll
+      scroll.addEventListener('scroll', checkScroll, { passive: true });
+
+      // Check on resize
+      window.addEventListener('resize', checkScroll, { passive: true });
+    }
   }
 
   // Remove trailing structural elements (hr, headings) with no paragraph content after them
@@ -312,6 +342,31 @@
       if (text === 'Image') {
         removeElementAndCleanup(p);
       }
+    }
+
+    return temp.innerHTML;
+  }
+
+  // Wrap tables in a scrollable container for wide tables
+  function wrapTables(html) {
+    const temp = document.createElement('div');
+    temp.innerHTML = html;
+
+    const tables = temp.querySelectorAll('table');
+    for (const table of tables) {
+      // Skip if already wrapped
+      if (table.parentElement.classList.contains('readr-table-scroll')) continue;
+
+      // Create nested structure: container (has gradient) > scroll (scrolls) > table
+      const container = document.createElement('div');
+      container.className = 'readr-table-container';
+
+      const scroll = document.createElement('div');
+      scroll.className = 'readr-table-scroll';
+
+      table.parentNode.insertBefore(container, table);
+      scroll.appendChild(table);
+      container.appendChild(scroll);
     }
 
     return temp.innerHTML;
@@ -1097,9 +1152,41 @@
       .readr-content li { margin-bottom: 0.4em; }
       .readr-content li > ul, .readr-content li > ol { margin: 0.4em 0; }
 
+      /* Table container - holds the fixed gradient overlay */
+      .readr-table-container {
+        position: relative;
+        margin: 1.5em -20px;
+      }
+
+      /* Inner scroll wrapper */
+      .readr-table-scroll {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      /* Scroll indicator gradient - fixed to container edge */
+      .readr-table-container::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: 40px;
+        background: linear-gradient(to right, transparent, var(--reader-card-bg));
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.2s ease;
+      }
+
+      /* Show gradient when scrollable */
+      .readr-table-container.is-scrollable::after {
+        opacity: 1;
+      }
+
       .readr-content table {
-        width: 100%;
-        margin: 1.5em 0;
+        min-width: 100%;
+        margin: 0;
+        padding: 0 20px;
         border-collapse: collapse;
         font-size: 0.95rem;
       }
@@ -1108,11 +1195,22 @@
         padding: 12px 16px;
         text-align: start;
         border-bottom: 1px solid var(--reader-border);
+        white-space: nowrap;
       }
 
       .readr-content th {
         font-weight: 600;
         background: var(--reader-code-bg);
+      }
+
+      .readr-content th:first-child,
+      .readr-content td:first-child {
+        padding-left: 20px;
+      }
+
+      .readr-content th:last-child,
+      .readr-content td:last-child {
+        padding-right: 20px;
       }
 
       .readr-content tr:last-child td { border-bottom: none; }
@@ -1168,6 +1266,25 @@
           margin-right: -12px;
           border-radius: 0;
         }
+
+        .readr-table-container {
+          margin-left: -12px;
+          margin-right: -12px;
+        }
+
+        .readr-content table {
+          padding: 0 12px;
+        }
+
+        .readr-content th:first-child,
+        .readr-content td:first-child {
+          padding-left: 12px;
+        }
+
+        .readr-content th:last-child,
+        .readr-content td:last-child {
+          padding-right: 12px;
+        }
       }
 
       @media (max-width: 600px) {
@@ -1206,9 +1323,24 @@
         }
 
         .readr-content figure,
-        .readr-content pre {
+        .readr-content pre,
+        .readr-table-container {
           margin-left: -8px;
           margin-right: -8px;
+        }
+
+        .readr-content table {
+          padding: 0 8px;
+        }
+
+        .readr-content th:first-child,
+        .readr-content td:first-child {
+          padding-left: 8px;
+        }
+
+        .readr-content th:last-child,
+        .readr-content td:last-child {
+          padding-right: 8px;
         }
       }
 
