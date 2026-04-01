@@ -19,6 +19,19 @@
   // Clone the document for Readability parsing
   const documentClone = document.cloneNode(true);
 
+  // Preprocess: Remove author bios before Readability processes
+  // The Verge uses spans with "dangerously-set-cms-markup" class for author bios
+  // that start with "is a [job title]..." - removing these prevents orphaned bio fragments
+  preprocessAuthorBios(documentClone);
+
+  // Preprocess: Unwrap Substack image links so Readability preserves the images
+  preprocessSubstackImages(documentClone);
+
+  // Preprocess: Merge split article content containers (e.g., Ars Technica splits
+  // post-content into multiple divs separated by ads). Readability scores each
+  // independently and may only pick one, losing the beginning of the article.
+  preprocessSplitContent(documentClone);
+
   // Preprocess: Convert image wrapper divs to figures
   // Readability's negative regex matches "media" in class names like "media-wrapper",
   // causing it to strip these divs. Converting to <figure> gives them protection.
@@ -39,18 +52,28 @@
 
   // Look for hero image, but skip if the content already starts with an image
   let heroImageHTML = '';
+  let heroImage = null;
   const contentHasLeadImage = checkForLeadImage(article.content);
   if (!contentHasLeadImage) {
-    const heroImage = findHeroImage();
+    heroImage = findHeroImage();
     if (heroImage) {
-      heroImageHTML = `<figure class="readr-hero"><img src="${escapeAttr(heroImage.src)}" alt="${escapeAttr(heroImage.alt || '')}">${heroImage.caption ? `<figcaption>${escapeHTML(heroImage.caption)}</figcaption>` : ''}</figure>`;
+      heroImageHTML = buildHeroImageHTML(heroImage);
     }
   }
 
   // Clean up the article content
   let cleanedContent = trimTrailingStructuralElements(article.content);
+  if (heroImageHTML) {
+    const dupPosition = findHeroImageInContent(cleanedContent, heroImage.src);
+    if (dupPosition === 'early') {
+      // Duplicate is near the top — remove it from content, keep the hero
+      cleanedContent = removeHeroImageFromContent(cleanedContent, heroImage.src);
+    } else if (dupPosition === 'later') {
+      // Image is used intentionally deeper in the article — don't show the hero
+      heroImageHTML = '';
+    }
+  }
   cleanedContent = removeTinyImages(cleanedContent);
-  cleanedContent = removeOrphanedBios(cleanedContent);
   cleanedContent = removeImageOnlyParagraphs(cleanedContent);
   cleanedContent = deduplicateImages(cleanedContent);
   cleanedContent = wrapTables(cleanedContent);
@@ -62,6 +85,8 @@
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+      <meta name="theme-color" content="#121212" media="(prefers-color-scheme: dark)">
       <title>${escapeHTML(article.title)}</title>
       <style>${getInlineStyles()}</style>
     </head>
@@ -112,89 +137,14 @@
   setupTableScrollIndicators();
 
   // DEBUG: Add test overlay showing raw Readability output
+  // Diagnostics panel — to enable, uncomment this block and add tracking
+  // variables (heroImageCandidate, heroAction, dupPosition) before the hero
+  // dedup logic. See CLAUDE.md for details.
+  //
   // const debugOverlay = document.createElement('div');
   // debugOverlay.id = 'readr-debug';
-  // debugOverlay.innerHTML = `
-  //   <style>
-  //     #readr-debug {
-  //       position: fixed;
-  //       bottom: 20px;
-  //       right: 20px;
-  //       width: 500px;
-  //       max-height: 80vh;
-  //       background: #1e1e1e;
-  //       color: #e8e8e8;
-  //       border-radius: 8px;
-  //       box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-  //       font-family: monospace;
-  //       font-size: 12px;
-  //       z-index: 10000;
-  //       overflow: hidden;
-  //     }
-  //     #readr-debug-header {
-  //       padding: 10px 14px;
-  //       background: #333;
-  //       font-weight: bold;
-  //       cursor: pointer;
-  //       display: flex;
-  //       justify-content: space-between;
-  //       gap: 12px;
-  //     }
-  //     #readr-debug-header span:last-child { cursor: pointer; }
-  //     #readr-debug-copy {
-  //       background: #555;
-  //       border: none;
-  //       color: #e8e8e8;
-  //       padding: 2px 8px;
-  //       border-radius: 4px;
-  //       cursor: pointer;
-  //       font-size: 11px;
-  //     }
-  //     #readr-debug-copy:hover { background: #666; }
-  //     #readr-debug-content {
-  //       padding: 14px;
-  //       overflow: auto;
-  //       max-height: calc(80vh - 40px);
-  //     }
-  //     #readr-debug pre {
-  //       margin: 0;
-  //       white-space: pre-wrap;
-  //       word-break: break-all;
-  //     }
-  //     #readr-debug h4 {
-  //       margin: 12px 0 6px;
-  //       color: #6bb8ff;
-  //     }
-  //     #readr-debug h4:first-child { margin-top: 0; }
-  //   </style>
-  //   <div id="readr-debug-header">
-  //     <span>Readability Raw Output</span>
-  //     <button id="readr-debug-copy">Copy</button>
-  //     <span onclick="document.getElementById('readr-debug').remove()">✕</span>
-  //   </div>
-  //   <div id="readr-debug-content">
-  //     <h4>title</h4>
-  //     <pre>${escapeHTML(article.title)}</pre>
-  //     <h4>byline</h4>
-  //     <pre>${escapeHTML(article.byline || '(none)')}</pre>
-  //     <h4>siteName</h4>
-  //     <pre>${escapeHTML(article.siteName || '(none)')}</pre>
-  //     <h4>excerpt</h4>
-  //     <pre>${escapeHTML(article.excerpt || '(none)')}</pre>
-  //     <h4>content (raw HTML)</h4>
-  //     <pre>${escapeHTML(article.content)}</pre>
-  //   </div>
-  // `;
+  // debugOverlay.innerHTML = `...`; // full template in git history
   // document.body.appendChild(debugOverlay);
-  // document.getElementById('readr-debug-copy').addEventListener('click', () => {
-  //   const text = document.getElementById('readr-debug-content').innerText;
-  //   navigator.clipboard.writeText(text).then(() => {
-  //     document.getElementById('readr-debug-copy').textContent = 'Copied!';
-  //     setTimeout(() => {
-  //       document.getElementById('readr-debug-copy').textContent = 'Copy';
-  //     }, 1500);
-  //   });
-  // });
 
   function exitReaderMode() {
     sessionStorage.removeItem("__readrActive");
@@ -313,24 +263,6 @@
     return temp.innerHTML;
   }
 
-  // Remove orphaned author bios - paragraphs starting with "is [job title]"
-  // This happens when Readability extracts the author name to byline but leaves the bio
-  function removeOrphanedBios(html) {
-    const temp = document.createElement('div');
-    temp.innerHTML = html;
-
-    const paragraphs = temp.querySelectorAll('p');
-    for (const p of paragraphs) {
-      const text = p.textContent.trim();
-      // Match "is [optional a/an] [optional adjective] [job title]" at the start
-      if (/^is\s+(an?\s+)?(\w+[\s-])*?(editor|writer|reporter|journalist|correspondent|contributor|columnist|critic|analyst|producer|photographer|author|host|co-host)\b/i.test(text)) {
-        removeElementAndCleanup(p);
-      }
-    }
-
-    return temp.innerHTML;
-  }
-
   // Remove paragraphs that contain only "Image" text (leftover from image alt/caption extraction)
   function removeImageOnlyParagraphs(html) {
     const temp = document.createElement('div');
@@ -367,6 +299,92 @@
       table.parentNode.insertBefore(container, table);
       scroll.appendChild(table);
       container.appendChild(scroll);
+    }
+
+    return temp.innerHTML;
+  }
+
+  // Extract the base filename without size suffix for flexible matching
+  // e.g., "photo-1024x853.jpg" → "photo" and "photo.jpg" → "photo"
+  function getBaseFilename(url) {
+    try {
+      const pathname = new URL(url, window.location.href).pathname;
+      const filename = pathname.split('/').pop();
+      return filename.replace(/\.[^.]+$/, '').replace(/-\d+x\d+$/, '');
+    } catch (e) {
+      return url;
+    }
+  }
+
+  // Check if the hero image appears in the article content and where.
+  // Returns 'early' if near the top (first 3 top-level elements),
+  // 'later' if deeper in the article, or null if not found.
+  function findHeroImageInContent(html, heroSrc) {
+    if (!heroSrc) return null;
+
+    const temp = document.createElement('div');
+    temp.innerHTML = html;
+
+    const heroBase = getBaseFilename(heroSrc);
+
+    // Drill down past Readability's wrapper divs to find the actual content container
+    // (e.g., div#readability-page-1 > div > article > div)
+    let contentRoot = temp;
+    while (contentRoot.children.length === 1 && !contentRoot.children[0].matches('p, figure, img')) {
+      contentRoot = contentRoot.children[0];
+    }
+    const topLevelChildren = Array.from(contentRoot.children);
+
+    for (const img of temp.querySelectorAll('img')) {
+      const src = img.src || img.dataset.src || img.dataset.lazySrc || '';
+      if (!src) continue;
+
+      if (getBaseFilename(src) === heroBase) {
+        // Find which top-level element of the content container holds this image
+        let ancestor = img;
+        while (ancestor.parentElement && ancestor.parentElement !== contentRoot) {
+          ancestor = ancestor.parentElement;
+        }
+        const index = topLevelChildren.indexOf(ancestor);
+        return (index !== -1 && index <= 2) ? 'early' : 'later';
+      }
+    }
+
+    return null;
+  }
+
+  // Remove the hero image from the article content to prevent duplicates
+  function removeHeroImageFromContent(html, heroSrc) {
+    if (!heroSrc) return html;
+
+    const temp = document.createElement('div');
+    temp.innerHTML = html;
+
+    const heroBase = getBaseFilename(heroSrc);
+    const imgs = temp.querySelectorAll('img');
+
+    for (const img of imgs) {
+      const src = img.src || img.dataset.src || img.dataset.lazySrc || '';
+      if (!src) continue;
+
+      const imgBase = getBaseFilename(src);
+      if (imgBase === heroBase) {
+        // Remove the figure/container wrapping the image, or just the image
+        const figure = img.closest('figure');
+        if (figure) {
+          figure.remove();
+        } else {
+          // If the image is the only child in a p or div, remove the container
+          const parent = img.parentElement;
+          if (parent && (parent.tagName === 'P' || parent.tagName === 'DIV') &&
+              parent.children.length === 1 && !parent.textContent.trim()) {
+            parent.remove();
+          } else {
+            img.remove();
+          }
+        }
+        break; // Only remove the first match
+      }
     }
 
     return temp.innerHTML;
@@ -488,12 +506,6 @@
 
     let cleaned = byline;
 
-    // Check if this is actually an orphaned bio fragment (no author name)
-    // e.g., "is editor-at-large and Vergecast co-host..." without the name
-    if (/^is\s+(an?\s+)?(\w+[\s-])*?(editor|writer|reporter|journalist|correspondent|contributor|columnist|critic|analyst|producer|photographer|author|host|co-host)\b/i.test(cleaned)) {
-      return '';
-    }
-
     // Remove common date/time patterns that get concatenated
     // "Publishedyesterday" "Updated08:01" etc.
     cleaned = cleaned.replace(/Published\s*/gi, '');
@@ -550,6 +562,29 @@
     }
 
     return cleaned;
+  }
+
+  function buildHeroImageHTML(hero) {
+    let imgAttrs = `src="${escapeAttr(hero.src)}" alt="${escapeAttr(hero.alt || '')}"`;
+    if (hero.srcset) imgAttrs += ` srcset="${escapeAttr(hero.srcset)}"`;
+    if (hero.sizes) imgAttrs += ` sizes="${escapeAttr(hero.sizes)}"`;
+
+    let imgTag;
+    if (hero.sourceElements && hero.sourceElements.length > 0) {
+      const sources = hero.sourceElements.map(s => {
+        let attrs = `srcset="${escapeAttr(s.srcset)}"`;
+        if (s.type) attrs += ` type="${escapeAttr(s.type)}"`;
+        if (s.media) attrs += ` media="${escapeAttr(s.media)}"`;
+        if (s.sizes) attrs += ` sizes="${escapeAttr(s.sizes)}"`;
+        return `<source ${attrs}>`;
+      }).join('');
+      imgTag = `<picture>${sources}<img ${imgAttrs}></picture>`;
+    } else {
+      imgTag = `<img ${imgAttrs}>`;
+    }
+
+    const caption = hero.caption ? `<figcaption>${escapeHTML(hero.caption)}</figcaption>` : '';
+    return `<figure class="readr-hero">${imgTag}${caption}</figure>`;
   }
 
   // Find the hero/lead image of the article
@@ -724,6 +759,25 @@
   function extractImageData(img) {
     const src = img.src || img.dataset.src || img.dataset.lazySrc || '';
     const alt = img.alt || '';
+    const srcset = img.getAttribute('srcset') || '';
+    const sizes = img.getAttribute('sizes') || '';
+
+    // If inside a <picture>, also grab <source> srcsets
+    let sourceElements = [];
+    const picture = img.closest('picture');
+    if (picture) {
+      for (const source of picture.querySelectorAll('source')) {
+        const sSrcset = source.getAttribute('srcset');
+        if (sSrcset) {
+          sourceElements.push({
+            srcset: sSrcset,
+            type: source.getAttribute('type') || '',
+            media: source.getAttribute('media') || '',
+            sizes: source.getAttribute('sizes') || '',
+          });
+        }
+      }
+    }
 
     // Try to find caption
     let caption = '';
@@ -752,7 +806,7 @@
       }
     }
 
-    return { src: makeAbsolute(src), alt, caption };
+    return { src: makeAbsolute(src), alt, caption, srcset, sizes, sourceElements };
   }
 
   function makeAbsolute(url) {
@@ -804,8 +858,87 @@
     return false;
   }
 
+  // Preprocess author bios to remove them before Readability
+  // The Verge uses spans with "dangerously-set-cms-markup" class for author bios
+  function preprocessAuthorBios(doc) {
+    // Target spans with The Verge's CMS markup class that contain author bios
+    const bioSpans = doc.querySelectorAll('span[class*="dangerously-set-cms-markup"]');
+
+    for (const span of bioSpans) {
+      const text = span.textContent.trim();
+      // Check if it starts with "is a/an [words] [job title]"
+      if (/^is\s+(an?\s+)?/i.test(text)) {
+        // Remove the bio span and its preceding author name span if present
+        const parent = span.parentElement;
+        if (parent) {
+          // The author name span typically comes right before in the same container
+          // Remove the entire parent container to get both name and bio
+          parent.remove();
+        } else {
+          span.remove();
+        }
+      }
+    }
+  }
+
   // Preprocess image containers to prevent Readability from stripping them
   // Converts divs with "media" in class name to <figure> elements
+  // Some sites (e.g., Ars Technica) split article content into multiple containers
+  // with ads between them. Readability scores each independently and may only pick
+  // the largest chunk, losing the rest. Merge them before Readability runs.
+  function preprocessSplitContent(doc) {
+    // Look for multiple sibling-ish containers with the same content class
+    const contentSelectors = [
+      '.post-content',
+      '.article-content',
+      '.entry-content',
+      '.story-body',
+    ];
+
+    for (const selector of contentSelectors) {
+      const containers = doc.querySelectorAll(selector);
+      if (containers.length < 2) continue;
+
+      // Use the first container as the merge target
+      const first = containers[0];
+
+      for (let i = 1; i < containers.length; i++) {
+        // Move all children from subsequent containers into the first
+        while (containers[i].firstChild) {
+          first.appendChild(containers[i].firstChild);
+        }
+        // Remove the now-empty container
+        containers[i].remove();
+      }
+
+      // Also remove ad containers that were between the content divs
+      // (they're now orphaned siblings or already outside)
+      break; // Only process the first matching selector
+    }
+  }
+
+  // Substack wraps images in <a> tags with overlay buttons inside <figure>.
+  // Readability sees a bad link-to-text ratio and strips the whole link, losing the image.
+  // Fix: extract the <img> out of the link and place it directly in the <figure>.
+  function preprocessSubstackImages(doc) {
+    // Substack-specific: the link has both image-link and image2 classes,
+    // and contains a div.image2-inset with a <picture> element
+    const links = doc.querySelectorAll('figure a.image-link.image2');
+    for (const link of links) {
+      const figure = link.closest('figure');
+      if (!figure) continue;
+
+      const img = link.querySelector('img');
+      if (!img) continue;
+
+      // Insert the img directly into the figure, before the link
+      figure.insertBefore(img, link);
+
+      // Remove the link (contains buttons, SVGs, picture/source elements we don't need)
+      link.remove();
+    }
+  }
+
   function preprocessImageContainers(doc) {
     // Readability's negative pattern includes "media", which strips divs like "media-wrapper"
     // Find divs that contain images and have problematic class names

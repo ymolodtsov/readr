@@ -64,3 +64,29 @@ Added `preprocessImageContainers()` in content.js to fix images being stripped o
 **Solution**: Before running Readability, convert divs matching `/media|image-container|img-wrapper|photo-wrapper/i` that contain images into `<figure>` elements. Also strips SVG-only links (like "view full size" icons) from these containers.
 
 **Status**: Under testing. May need to be removed or refined if it causes issues on other sites.
+
+## Substack Image Preprocessing
+
+Added `preprocessSubstackImages()` in content.js to fix images being stripped on Substack.
+
+**Problem**: Substack wraps images in `<a class="image-link image2">` inside `<figure>`. The link contains a `<picture>` element, overlay buttons with SVGs, etc. Readability sees a bad link-to-text ratio and strips the whole link, losing the image.
+
+**Solution**: Before running Readability, find `figure a.image-link.image2` links, extract the `<img>` out, and place it directly in the `<figure>`. The link and its button/SVG junk are removed.
+
+## Hero Image Deduplication Logic
+
+When a hero image is found and also appears in the Readability article content:
+
+- **Early** (within first 3 top-level content elements): Treated as a duplicate — removed from content, hero is kept.
+- **Later** (deeper in the article): Treated as an intentional illustration — hero is suppressed, content is left alone.
+- **Not found**: Hero is shown as-is.
+
+The `findHeroImageInContent()` function drills past Readability's wrapper divs (`div#readability-page-1 > div > article > div`) to find the actual content container before counting element positions.
+
+## Diagnostics Panel
+
+There is a commented-out diagnostics overlay in content.js (search for `readr-debug`). To enable it:
+1. Uncomment the overlay block
+2. Add tracking variables before the hero dedup logic: `heroImageCandidate` (set to `heroImage` after `findHeroImage()`), `heroAction` (string), and make `dupPosition` available in the outer scope.
+
+It shows hero image src, contentHasLeadImage, dupPosition, action taken, article metadata, and raw Readability HTML output. Has a copy button for easy sharing.
