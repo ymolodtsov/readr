@@ -37,46 +37,68 @@
   // causing it to strip these divs. Converting to <figure> gives them protection.
   preprocessImageContainers(documentClone);
 
-  // Parse the article using Readability
-  const reader = new Readability(documentClone);
-  const article = reader.parse();
+  // Detect special site modes
+  const isXThread = /^https?:\/\/(x\.com|twitter\.com)\//i.test(window.location.href);
+  const isYouTube = /^https?:\/\/(www\.)?youtube\.com\/watch/i.test(window.location.href);
 
-  if (!article) {
-    alert("Readr couldn't extract article content from this page.");
-    sessionStorage.removeItem("__readrActive");
+  // YouTube: show embedded player with chapters and transcript
+  if (isYouTube) {
+    activateYouTubeMode();
     return;
   }
 
-  // Clean up the byline (Readability sometimes concatenates metadata)
-  const cleanedByline = cleanByline(article.byline);
+  let article, cleanedByline, heroImageHTML, cleanedContent, xAuthor;
 
-  // Look for hero image, but skip if the content already starts with an image
-  let heroImageHTML = '';
-  let heroImage = null;
-  const contentHasLeadImage = checkForLeadImage(article.content);
-  if (!contentHasLeadImage) {
-    heroImage = findHeroImage();
-    if (heroImage) {
-      heroImageHTML = buildHeroImageHTML(heroImage);
-    }
-  }
+  if (isXThread) {
+    // Extract content directly from the DOM — Readability mangles X's structure
+    const xResult = extractXThread(document);
+    article = { title: document.title, byline: '', siteName: 'X', excerpt: '' };
+    xAuthor = parseXAuthor(article.title);
+    cleanedByline = '';
+    heroImageHTML = '';
+    cleanedContent = xResult;
+  } else {
+    // Parse the article using Readability
+    const reader = new Readability(documentClone);
+    article = reader.parse();
 
-  // Clean up the article content
-  let cleanedContent = trimTrailingStructuralElements(article.content);
-  if (heroImageHTML) {
-    const dupPosition = findHeroImageInContent(cleanedContent, heroImage.src);
-    if (dupPosition === 'early') {
-      // Duplicate is near the top — remove it from content, keep the hero
-      cleanedContent = removeHeroImageFromContent(cleanedContent, heroImage.src);
-    } else if (dupPosition === 'later') {
-      // Image is used intentionally deeper in the article — don't show the hero
-      heroImageHTML = '';
+    if (!article) {
+      alert("Readr couldn't extract article content from this page.");
+      sessionStorage.removeItem("__readrActive");
+      return;
     }
+
+    xAuthor = null;
+
+    // Clean up the byline (Readability sometimes concatenates metadata)
+    cleanedByline = cleanByline(article.byline);
+
+    // Look for hero image, but skip if the content already starts with an image
+    heroImageHTML = '';
+    let heroImage = null;
+    const contentHasLeadImage = checkForLeadImage(article.content);
+    if (!contentHasLeadImage) {
+      heroImage = findHeroImage();
+      if (heroImage) {
+        heroImageHTML = buildHeroImageHTML(heroImage);
+      }
+    }
+
+    // Clean up the article content
+    cleanedContent = trimTrailingStructuralElements(article.content);
+    if (heroImageHTML) {
+      const dupPosition = findHeroImageInContent(cleanedContent, heroImage.src);
+      if (dupPosition === 'early') {
+        cleanedContent = removeHeroImageFromContent(cleanedContent, heroImage.src);
+      } else if (dupPosition === 'later') {
+        heroImageHTML = '';
+      }
+    }
+    cleanedContent = removeTinyImages(cleanedContent);
+    cleanedContent = removeImageOnlyParagraphs(cleanedContent);
+    cleanedContent = deduplicateImages(cleanedContent);
+    cleanedContent = wrapTables(cleanedContent);
   }
-  cleanedContent = removeTinyImages(cleanedContent);
-  cleanedContent = removeImageOnlyParagraphs(cleanedContent);
-  cleanedContent = deduplicateImages(cleanedContent);
-  cleanedContent = wrapTables(cleanedContent);
 
   // Build the reader view
   const readerHTML = `
@@ -99,6 +121,12 @@
         </button>
         <article class="readr-container">
           <header class="readr-header">
+            ${isXThread && xAuthor ? `
+            <div class="readr-x-author">
+              <span class="readr-x-name">${escapeHTML(xAuthor.name)}</span>
+              ${xAuthor.handle ? `<span class="readr-x-handle">@${escapeHTML(xAuthor.handle)}</span>` : ''}
+            </div>
+            ` : `
             <h1 class="readr-title">${escapeHTML(article.title)}</h1>
             ${cleanedByline || article.siteName ? `
             <div class="readr-meta">
@@ -107,6 +135,7 @@
             </div>
             ` : ""}
             ${article.excerpt ? `<p class="readr-excerpt">${escapeHTML(article.excerpt)}</p>` : ""}
+            `}
           </header>
           ${heroImageHTML}
           <div class="readr-content">
@@ -136,15 +165,91 @@
   // Set up scrollable table indicators
   setupTableScrollIndicators();
 
-  // DEBUG: Add test overlay showing raw Readability output
-  // Diagnostics panel — to enable, uncomment this block and add tracking
-  // variables (heroImageCandidate, heroAction, dupPosition) before the hero
-  // dedup logic. See CLAUDE.md for details.
+  // DEBUG: Diagnostics panel — uncomment to enable. See CLAUDE.md for details.
   //
   // const debugOverlay = document.createElement('div');
   // debugOverlay.id = 'readr-debug';
-  // debugOverlay.innerHTML = `...`; // full template in git history
+  // debugOverlay.innerHTML = `
+  //   <style>
+  //     #readr-debug {
+  //       position: fixed;
+  //       bottom: 20px;
+  //       right: 20px;
+  //       width: 500px;
+  //       max-height: 80vh;
+  //       background: #1e1e1e;
+  //       color: #e8e8e8;
+  //       border-radius: 8px;
+  //       box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  //       font-family: monospace;
+  //       font-size: 12px;
+  //       z-index: 10000;
+  //       overflow: hidden;
+  //     }
+  //     #readr-debug-header {
+  //       padding: 10px 14px;
+  //       background: #333;
+  //       font-weight: bold;
+  //       cursor: pointer;
+  //       display: flex;
+  //       justify-content: space-between;
+  //       gap: 12px;
+  //     }
+  //     #readr-debug-header span:last-child { cursor: pointer; }
+  //     #readr-debug-copy {
+  //       background: #555;
+  //       border: none;
+  //       color: #e8e8e8;
+  //       padding: 2px 8px;
+  //       border-radius: 4px;
+  //       cursor: pointer;
+  //       font-size: 11px;
+  //     }
+  //     #readr-debug-copy:hover { background: #666; }
+  //     #readr-debug-content {
+  //       padding: 14px;
+  //       overflow: auto;
+  //       max-height: calc(80vh - 40px);
+  //     }
+  //     #readr-debug pre {
+  //       margin: 0;
+  //       white-space: pre-wrap;
+  //       word-break: break-all;
+  //     }
+  //     #readr-debug h4 {
+  //       margin: 12px 0 6px;
+  //       color: #6bb8ff;
+  //     }
+  //     #readr-debug h4:first-child { margin-top: 0; }
+  //   </style>
+  //   <div id="readr-debug-header">
+  //     <span>Readr Diagnostics</span>
+  //     <button id="readr-debug-copy">Copy</button>
+  //     <span id="readr-debug-close" style="cursor:pointer">✕</span>
+  //   </div>
+  //   <div id="readr-debug-content">
+  //     <h4>isXThread</h4>
+  //     <pre>${isXThread}</pre>
+  //     ${isXThread ? `<h4>xAuthor</h4><pre>${escapeHTML(JSON.stringify(xAuthor))}</pre>` : ''}
+  //     <h4>title</h4>
+  //     <pre>${escapeHTML(article.title)}</pre>
+  //     <h4>content (cleaned HTML)</h4>
+  //     <pre>${escapeHTML(cleanedContent)}</pre>
+  //   </div>
+  // `;
   // document.body.appendChild(debugOverlay);
+  // document.getElementById('readr-debug-close').addEventListener('click', () => {
+  //   document.getElementById('readr-debug').remove();
+  // });
+  // document.getElementById('readr-debug-copy').addEventListener('click', () => {
+  //   const text = document.getElementById('readr-debug-content').innerText;
+  //   navigator.clipboard.writeText(text).then(() => {
+  //     document.getElementById('readr-debug-copy').textContent = 'Copied!';
+  //     setTimeout(() => {
+  //       document.getElementById('readr-debug-copy').textContent = 'Copy';
+  //     }, 1500);
+  //   });
+  // });
 
   function exitReaderMode() {
     sessionStorage.removeItem("__readrActive");
@@ -562,6 +667,691 @@
     }
 
     return cleaned;
+  }
+
+  // Extract author name and handle from X/Twitter title
+  // Title format: "Author Name on X: \"tweet text...\" / X"
+  function parseXAuthor(title) {
+    const match = title.match(/^(.+?)\s+on\s+X:/);
+    const name = match ? match[1].trim() : null;
+
+    // Extract handle from URL: x.com/username/status/...
+    const urlMatch = window.location.pathname.match(/^\/([^/]+)\//);
+    const handle = urlMatch ? urlMatch[1] : null;
+
+    if (!name && !handle) return null;
+    return { name: name || handle, handle };
+  }
+
+  // Extract X thread content directly from the live DOM, bypassing Readability.
+  // Reads [data-testid="tweetText"] elements to preserve @mentions, links, and images.
+  function extractXThread(doc) {
+    const tweetTexts = doc.querySelectorAll('[data-testid="tweetText"]');
+    if (tweetTexts.length === 0) return '<p>Could not extract tweets from this page.</p>';
+
+    const fragments = [];
+    for (let i = 0; i < tweetTexts.length; i++) {
+      if (i > 0) {
+        fragments.push('<div class="readr-x-sep"></div>');
+      }
+      // Use textContent to get clean inline text with @mentions preserved
+      const text = tweetTexts[i].textContent;
+
+      // Split on double newlines to create proper paragraphs
+      const parts = text.split(/\n\s*\n/);
+      for (const part of parts) {
+        const trimmed = part.trim();
+        if (trimmed) {
+          fragments.push(`<p>${escapeHTML(trimmed)}</p>`);
+        }
+      }
+    }
+
+    return fragments.join('\n');
+  }
+
+  // YouTube mode: extract chapters, transcript, and display in reader view with embedded player
+  function activateYouTubeMode() {
+    const videoId = new URL(window.location.href).searchParams.get('v');
+    if (!videoId) {
+      alert("Readr couldn't find a video ID on this page.");
+      sessionStorage.removeItem("__readrActive");
+      return;
+    }
+
+    // Read YouTube data (extracted by background script via MAIN world, stored in sessionStorage)
+    const ytData = extractYouTubePageData();
+    const title = ytData.title || document.title.replace(/^\(\d+\)\s*/, '').replace(/ - YouTube$/, '');
+    const channel = ytData.channel || '';
+    const chapters = ytData.chapters || [];
+    const hasChapters = chapters.length > 0;
+    const pagePlayer = findYouTubePagePlayer();
+    const usePagePlayer = !!pagePlayer;
+
+    // Parse transcript (already fetched by background script)
+    const segments = ytData.transcriptText ? parseYTTranscriptResponse(ytData.transcriptText) : [];
+    const hasTranscript = segments.length > 0;
+
+    // Build chapters HTML
+    const chaptersHTML = hasChapters ? chapters.map(ch =>
+      `<div class="readr-yt-chapter" data-time="${ch.time}">
+        <span class="readr-yt-chapter-time">${formatYTTime(ch.time)}</span>
+        <span class="readr-yt-chapter-title">${escapeHTML(ch.title)}</span>
+      </div>`
+    ).join('') : '';
+
+    // Build transcript HTML
+    const transcriptHTML = hasTranscript ? buildYTTranscriptHTML(segments, chapters) : '';
+
+    // Build the reader view via DOM replacement (NOT document.write).
+    // document.write() reopens the document which re-evaluates CSP headers.
+    // replaceWith swaps elements without reopening the document.
+    const bodyHTML = `
+  <button class="readr-close" title="Exit Reader View" aria-label="Exit Reader View">
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M1 1L13 13M1 13L13 1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </svg>
+  </button>
+  <div class="readr-yt-layout ${hasChapters ? 'has-chapters' : ''}">
+    ${hasChapters ? `
+    <aside class="readr-yt-chapters">
+      ${chaptersHTML}
+    </aside>` : ''}
+    <div class="readr-yt-main">
+      <div class="readr-yt-card">
+        <div class="readr-yt-video">
+          ${usePagePlayer ? `
+          <div id="readr-yt-page-player"></div>` : `
+          <iframe id="readr-yt-player" data-video-id="${escapeAttr(videoId)}"
+            src="https://www.youtube.com/embed/${escapeAttr(encodeURIComponent(videoId))}"
+            title="YouTube video player"
+            frameborder="0"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            referrerpolicy="strict-origin-when-cross-origin"
+            allowfullscreen></iframe>`}
+        </div>
+        <div class="readr-yt-info">
+          <h1 class="readr-yt-title">${escapeHTML(title)}</h1>
+          ${channel ? `<p class="readr-yt-channel">${escapeHTML(channel)}</p>` : ''}
+        </div>
+        ${hasTranscript ? `
+        <div class="readr-yt-transcript-wrap">
+          ${transcriptHTML}
+        </div>` : ''}
+      </div>
+    </div>
+  </div>`;
+
+    if (usePagePlayer) {
+      // Keep YouTube's loaded head CSS/scripts so the real player UI survives.
+      // Readr's UI styles are injected only into the shadow root below.
+      document.title = title;
+      document.documentElement.removeAttribute('class');
+      document.documentElement.removeAttribute('style');
+      document.documentElement.setAttribute('lang', 'en');
+    } else {
+      // Clean the html element of YouTube's classes/attributes.
+      document.documentElement.removeAttribute('class');
+      document.documentElement.removeAttribute('style');
+      document.documentElement.setAttribute('lang', 'en');
+
+      // Replace head: clear YouTube's styles and scripts, inject ours.
+      const newHead = document.createElement('head');
+      newHead.innerHTML = `
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>${escapeHTML(title)}</title>
+        <style>${getInlineStyles()}${getYouTubeStyles()}</style>`;
+      document.head.replaceWith(newHead);
+    }
+
+    // Replace body: swap YouTube's UI with reader view
+    const newBody = document.createElement('body');
+    newBody.className = 'readr-active readr-yt';
+    newBody.style.margin = '0';
+    newBody.style.minHeight = '100vh';
+    document.body.replaceWith(newBody);
+    const updatePageBackground = createReaderBackgroundSync(document.documentElement, newBody);
+
+    if (usePagePlayer) {
+      const host = document.createElement('div');
+      host.id = 'readr-yt-shadow-host';
+      host.style.display = 'block';
+      host.style.width = '100%';
+      host.style.minHeight = '100vh';
+      updatePageBackground(host);
+      newBody.appendChild(host);
+
+      const shadow = host.attachShadow({ mode: 'open' });
+      shadow.innerHTML = `<style>${getInlineStyles()}${getYouTubeStyles()}</style>${bodyHTML}`;
+      mountYouTubePagePlayer(pagePlayer, host);
+
+      shadow.querySelector('.readr-close').addEventListener('click', exitReaderMode);
+      setupYouTubeInteractivity(shadow);
+    } else {
+      newBody.innerHTML = bodyHTML;
+
+      // Remove any stray YouTube stylesheets that survived the head swap.
+      document.querySelectorAll('link[rel="stylesheet"], style:not([data-readr])').forEach(el => {
+        if (!el.closest('head')) el.remove();
+      });
+
+      document.querySelector('.readr-close').addEventListener('click', exitReaderMode);
+      setupYouTubeInteractivity(document);
+    }
+
+    // Set up Escape handler
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') exitReaderMode();
+    });
+  }
+
+  // Read YouTube data stored by the background script (extracted via MAIN world
+  // to bypass YouTube's CSP which blocks inline script injection)
+  function extractYouTubePageData() {
+    const stored = sessionStorage.getItem('__readrYTData');
+    sessionStorage.removeItem('__readrYTData');
+    if (stored) {
+      try {
+        const data = JSON.parse(stored);
+        if (data) return data;
+      } catch {}
+    }
+    // Fallback: basic info from DOM
+    return {
+      title: document.title.replace(/^\(\d+\)\s*/, '').replace(/ - YouTube$/, ''),
+      channel: '',
+      captionUrl: null,
+      chapters: []
+    };
+  }
+
+  // Decode HTML entities in transcript text (e.g., &#39; → ')
+  function decodeHTMLEntities(text) {
+    const el = document.createElement('textarea');
+    el.innerHTML = text;
+    return el.value;
+  }
+
+  // Parse transcript response (handles both XML and JSON3 formats)
+  function parseYTTranscriptResponse(text) {
+    const trimmed = text.trim();
+    if (trimmed.startsWith('<?xml') || trimmed.startsWith('<transcript')) {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(text, 'text/xml');
+      const nodes = doc.querySelectorAll('text');
+      const segments = [];
+      for (const t of nodes) {
+        const txt = decodeHTMLEntities(t.textContent.trim());
+        if (txt) {
+          segments.push({
+            start: parseFloat(t.getAttribute('start')) || 0,
+            dur: parseFloat(t.getAttribute('dur')) || 0,
+            text: txt
+          });
+        }
+      }
+      return segments;
+    }
+    // JSON3 format
+    try {
+      const json = JSON.parse(text);
+      if (json.events) {
+        return json.events
+          .filter(e => e.segs)
+          .map(e => ({
+            start: (e.tStartMs || 0) / 1000,
+            dur: (e.dDurationMs || 0) / 1000,
+            text: decodeHTMLEntities(e.segs.map(s => s.utf8 || '').join('').trim())
+          }))
+          .filter(s => s.text);
+      }
+    } catch (e) {}
+    return [];
+  }
+
+  // Build transcript HTML, grouped by chapters if available
+  function buildYTTranscriptHTML(segments, chapters) {
+    if (!segments.length) return '';
+    if (!chapters.length) {
+      return buildYTTranscriptSection(null, segments);
+    }
+    let html = '';
+    for (let i = 0; i < chapters.length; i++) {
+      const startTime = chapters[i].time;
+      const endTime = i + 1 < chapters.length ? chapters[i + 1].time : Infinity;
+      const chapterSegs = segments.filter(s => s.start >= startTime && s.start < endTime);
+      if (chapterSegs.length) {
+        html += buildYTTranscriptSection(chapters[i].title, chapterSegs);
+      }
+    }
+    return html;
+  }
+
+  // Build a single transcript section (one chapter or the entire transcript)
+  function buildYTTranscriptSection(title, segments) {
+    let html = '<div class="readr-yt-transcript-section">';
+    if (title) {
+      html += `<h3>${escapeHTML(title)}</h3>`;
+    }
+    // Merge segments into paragraphs of ~60 seconds
+    const INTERVAL = 60;
+    let paraStart = segments[0].start;
+    let paraTexts = [];
+    for (const seg of segments) {
+      if (seg.start - paraStart >= INTERVAL && paraTexts.length) {
+        html += `<p><a class="readr-yt-ts" data-time="${paraStart}">${formatYTTime(paraStart)}</a> &middot; ${paraTexts.join(' ')}</p>`;
+        paraStart = seg.start;
+        paraTexts = [];
+      }
+      paraTexts.push(escapeHTML(seg.text));
+    }
+    if (paraTexts.length) {
+      html += `<p><a class="readr-yt-ts" data-time="${paraStart}">${formatYTTime(paraStart)}</a> &middot; ${paraTexts.join(' ')}</p>`;
+    }
+    html += '</div>';
+    return html;
+  }
+
+  // Format seconds as m:ss or h:mm:ss
+  function formatYTTime(seconds) {
+    const s = Math.floor(seconds);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+    return `${m}:${String(sec).padStart(2, '0')}`;
+  }
+
+  // Set up YouTube player seeking and active chapter tracking
+  function setupYouTubeInteractivity(root = document) {
+    const iframe = root.getElementById ? root.getElementById('readr-yt-player') : root.querySelector('#readr-yt-player');
+    const pagePlayer = document.querySelector('.readr-yt-page-player');
+    if (!iframe && !pagePlayer) return;
+
+    const videoId = iframe?.dataset.videoId;
+    const pageVideo = pagePlayer?.querySelector('video');
+    if (pageVideo) {
+      pageVideo.addEventListener('timeupdate', () => updateYTActiveChapter(pageVideo.currentTime, root));
+    }
+
+    // Seek by reloading the embed with a start time parameter
+    function seekTo(seconds) {
+      const s = Math.max(0, Math.floor(seconds));
+      if (pagePlayer) {
+        seekYouTubePagePlayer(pagePlayer, s);
+      } else if (iframe) {
+        iframe.src = `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?autoplay=1&start=${s}`;
+      }
+    }
+
+    // Chapter clicks
+    root.querySelectorAll('.readr-yt-chapter').forEach(el => {
+      el.addEventListener('click', () => {
+        seekTo(parseFloat(el.dataset.time));
+        root.querySelectorAll('.readr-yt-chapter').forEach(c => c.classList.remove('active'));
+        el.classList.add('active');
+      });
+    });
+
+    // Transcript timestamp clicks
+    root.querySelectorAll('.readr-yt-ts').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.preventDefault();
+        seekTo(parseFloat(el.dataset.time));
+      });
+    });
+  }
+
+  function findYouTubePagePlayer() {
+    const player = document.querySelector('#movie_player');
+    if (player && player.querySelector('video')) return player;
+    return null;
+  }
+
+  function seekYouTubePagePlayer(player, seconds) {
+    const video = player.querySelector('video');
+    if (!video) return;
+    video.currentTime = seconds;
+    const playResult = video.play();
+    if (playResult && typeof playResult.catch === 'function') {
+      playResult.catch(() => {});
+    }
+  }
+
+  function mountYouTubePagePlayer(player, host) {
+    const mount = host.shadowRoot.getElementById('readr-yt-page-player');
+    if (!mount) return;
+
+    const slot = document.createElement('slot');
+    slot.name = 'yt-player';
+    mount.replaceWith(slot);
+
+    player.slot = 'yt-player';
+    player.classList.add('readr-yt-page-player');
+    player.style.display = 'block';
+    player.style.position = 'relative';
+    player.style.overflow = 'hidden';
+    player.style.background = '#000';
+    host.appendChild(player);
+
+    const resize = () => {
+      const container = host.shadowRoot.querySelector('.readr-yt-video');
+      const rect = (container || player).getBoundingClientRect();
+      const width = Math.max(1, Math.round(rect.width));
+      const height = Math.max(1, Math.round(width * 9 / 16));
+      player.style.width = '100%';
+      player.style.height = `${height}px`;
+      if (typeof player.setSize === 'function') {
+        player.setSize(width, height);
+      }
+    };
+
+    resize();
+    requestAnimationFrame(resize);
+    window.addEventListener('resize', resize);
+  }
+
+  function getReaderBackgroundColor() {
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+      ? '#121212'
+      : '#f8f8f8';
+  }
+
+  function createReaderBackgroundSync(...elements) {
+    const syncedElements = new Set(elements.filter(Boolean));
+
+    const apply = (...moreElements) => {
+      moreElements.filter(Boolean).forEach(el => syncedElements.add(el));
+      const bg = getReaderBackgroundColor();
+      syncedElements.forEach(el => {
+        el.style.backgroundColor = bg;
+      });
+    };
+
+    apply();
+
+    if (window.matchMedia) {
+      const media = window.matchMedia('(prefers-color-scheme: dark)');
+      const listener = () => apply();
+      if (media.addEventListener) {
+        media.addEventListener('change', listener);
+      } else if (media.addListener) {
+        media.addListener(listener);
+      }
+    }
+
+    return apply;
+  }
+
+  // Highlight the current chapter based on video playback time
+  function updateYTActiveChapter(currentTime, root = document) {
+    const chapters = root.querySelectorAll('.readr-yt-chapter');
+    let activeIndex = -1;
+    chapters.forEach((ch, i) => {
+      if (currentTime >= parseFloat(ch.dataset.time)) activeIndex = i;
+      ch.classList.remove('active');
+    });
+    if (activeIndex >= 0) {
+      chapters[activeIndex].classList.add('active');
+    }
+  }
+
+  // YouTube-specific styles
+  function getYouTubeStyles() {
+    return `
+      /* Reset YouTube's interference */
+      html, body.readr-yt { all: unset; }
+      body.readr-yt {
+        display: block;
+        margin: 0;
+        padding: 0;
+        background-color: var(--reader-bg) !important;
+        color: var(--reader-text) !important;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+        font-size: 18px !important;
+        line-height: 1.7 !important;
+        min-height: 100vh;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+
+      :host {
+        --reader-bg: #f8f8f8;
+        --reader-card-bg: #ffffff;
+        --reader-text: #1d1d1f;
+        --reader-text-secondary: #6e6e73;
+        --reader-link: #0066cc;
+        --reader-border: #e5e5e5;
+        --reader-code-bg: #f5f5f7;
+        --reader-selection: rgba(0, 102, 204, 0.2);
+        --reader-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 8px 30px rgba(0, 0, 0, 0.06);
+        display: block;
+        box-sizing: border-box;
+        width: 100%;
+        min-height: 100vh;
+        background-color: var(--reader-bg);
+        color: var(--reader-text);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        font-size: 18px;
+        line-height: 1.7;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :host {
+          --reader-bg: #121212;
+          --reader-card-bg: #1e1e1e;
+          --reader-text: #e8e8e8;
+          --reader-text-secondary: #a1a1a6;
+          --reader-link: #6bb8ff;
+          --reader-border: #333333;
+          --reader-code-bg: #2a2a2a;
+          --reader-selection: rgba(107, 184, 255, 0.3);
+          --reader-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 8px 30px rgba(0, 0, 0, 0.25);
+        }
+      }
+
+      .readr-yt-layout {
+        display: block !important;
+        min-height: 100vh;
+        padding: 40px 24px 80px;
+      }
+
+      .readr-yt-layout.has-chapters {
+        display: grid !important;
+        grid-template-columns: 260px 1fr;
+        grid-template-areas: "chapters main";
+        gap: 0;
+        max-width: none;
+        padding: 0;
+      }
+
+      /* Chapters sidebar */
+      .readr-yt-chapters {
+        grid-area: chapters;
+        padding: 32px 20px;
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        overflow-y: auto;
+      }
+
+      .readr-yt-chapters-heading {
+        font-size: 0.7rem !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--reader-text-secondary) !important;
+        margin: 0 0 16px !important;
+        padding: 0 !important;
+      }
+
+      .readr-yt-chapter {
+        display: flex !important;
+        gap: 12px;
+        padding: 6px 8px;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background 0.15s;
+        margin: 0 -8px;
+      }
+
+      .readr-yt-chapter:hover { background: var(--reader-code-bg); }
+      .readr-yt-chapter.active { background: var(--reader-code-bg); }
+      .readr-yt-chapter.active .readr-yt-chapter-time { color: var(--reader-link); }
+
+      .readr-yt-chapter-time {
+        font-family: "SF Mono", SFMono-Regular, ui-monospace, Menlo, monospace !important;
+        font-size: 0.78rem !important;
+        color: var(--reader-text-secondary) !important;
+        white-space: nowrap;
+        width: 44px;
+        flex-shrink: 0;
+        text-align: right;
+        line-height: 1.4;
+      }
+
+      .readr-yt-chapter-title {
+        font-size: 0.82rem !important;
+        color: var(--reader-text) !important;
+        line-height: 1.4;
+      }
+
+      /* Main content area */
+      .readr-yt-main {
+        grid-area: main;
+        padding: 40px;
+        display: flex;
+        justify-content: center;
+      }
+
+      .readr-yt-layout:not(.has-chapters) .readr-yt-main {
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 0;
+      }
+
+      /* Card container for video + transcript */
+      .readr-yt-card {
+        background: var(--reader-card-bg);
+        border-radius: 12px;
+        box-shadow: var(--reader-shadow);
+        overflow: hidden;
+        max-width: 840px;
+        width: 100%;
+      }
+
+      .readr-yt-video iframe {
+        width: 100% !important;
+        aspect-ratio: 16/9;
+        border: none !important;
+        display: block !important;
+        background: #000 !important;
+      }
+
+      ::slotted(.readr-yt-page-player) {
+        width: 100% !important;
+        display: block !important;
+        background: #000 !important;
+      }
+
+      .readr-yt-info {
+        padding: 20px 32px 0;
+      }
+
+      .readr-yt-title {
+        font-size: 1.3rem !important;
+        font-weight: 600 !important;
+        margin: 0 0 4px !important;
+        line-height: 1.3;
+        letter-spacing: -0.01em;
+        color: var(--reader-text) !important;
+      }
+
+      .readr-yt-channel {
+        margin: 0 !important;
+        color: var(--reader-text-secondary) !important;
+        font-size: 0.9rem !important;
+      }
+
+      /* Transcript inside the card */
+      .readr-yt-transcript-wrap {
+        padding: 24px 32px 40px;
+      }
+
+      .readr-yt-transcript-heading {
+        font-size: 1.3rem !important;
+        font-weight: 600 !important;
+        margin: 0 0 20px !important;
+        color: var(--reader-text) !important;
+      }
+
+      .readr-yt-transcript-section h3 {
+        font-size: 1.05rem !important;
+        font-weight: 600 !important;
+        margin: 24px 0 10px !important;
+        color: var(--reader-text) !important;
+      }
+
+      .readr-yt-transcript-section:first-child h3:first-child {
+        margin-top: 0 !important;
+      }
+
+      .readr-yt-transcript-section p {
+        margin: 0 0 14px !important;
+        line-height: 1.7 !important;
+        font-size: 1rem !important;
+        color: var(--reader-text) !important;
+      }
+
+      .readr-yt-ts {
+        color: var(--reader-link) !important;
+        text-decoration: underline;
+        text-decoration-thickness: 1px;
+        text-underline-offset: 2px;
+        cursor: pointer;
+        font-weight: 600;
+      }
+      .readr-yt-ts:hover { text-decoration-thickness: 2px; }
+
+      /* Responsive: chapters below video on narrow screens */
+      @media (max-width: 900px) {
+        .readr-yt-layout.has-chapters {
+          display: flex !important;
+          flex-direction: column;
+        }
+
+        .readr-yt-chapters {
+          position: static;
+          height: auto;
+          border-right: none;
+          border-bottom: 1px solid var(--reader-border);
+          order: -1;
+          padding: 20px 24px;
+        }
+
+        .readr-yt-main {
+          padding: 24px;
+        }
+      }
+
+      @media (max-width: 600px) {
+        .readr-yt-main { padding: 16px; }
+        .readr-yt-chapters { padding: 16px; }
+        .readr-yt-info { padding: 16px 20px 0; }
+        .readr-yt-transcript-wrap { padding: 16px 20px 32px; }
+        .readr-yt-card { border-radius: 8px; }
+        .readr-yt-title { font-size: 1.1rem !important; }
+      }
+
+      @media print {
+        .readr-close { display: none !important; }
+        .readr-yt-chapters { display: none !important; }
+        .readr-yt-video iframe { display: none !important; }
+      }
+    `;
   }
 
   function buildHeroImageHTML(hero) {
@@ -1475,6 +2265,41 @@
         .readr-content td:last-child {
           padding-right: 8px;
         }
+      }
+
+      /* X/Twitter thread styles */
+      .readr-x-author {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        margin-bottom: 8px;
+      }
+
+      .readr-x-name {
+        font-size: 1.4rem;
+        font-weight: 700;
+        color: var(--reader-text);
+        line-height: 1.3;
+      }
+
+      .readr-x-handle {
+        font-size: 0.95rem;
+        color: var(--reader-text-secondary);
+        font-weight: 400;
+      }
+
+      .readr-x-sep {
+        display: flex;
+        justify-content: center;
+        margin: 1.2em 0;
+      }
+
+      .readr-x-sep::before {
+        content: '';
+        width: 40px;
+        height: 1.5px;
+        background: var(--reader-border);
+        opacity: 0.75;
       }
 
       @media print {

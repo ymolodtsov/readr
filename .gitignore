@@ -3,3 +3,5 @@
 .venv/
 node_modules/
 readr.zip
+AGENTS.md
+CLAUDE.md
